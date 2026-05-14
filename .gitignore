@@ -6,10 +6,11 @@ build/
 bin/
 test_rb
 test_rb_stress
+test_get
+test_get_stress
 
 # Project-specific binaries (if named after directories or common patterns)
 echo-server
 echo-client
-
 # Gemini configuration
 GEMINI.md
