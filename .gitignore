@@ -1,0 +1,13 @@
+# Binary files
+*.o
+*.out
+*.exe
+build/
+bin/
+
+# Project-specific binaries (if named after directories or common patterns)
+echo-server
+echo-client
+
+# Gemini configuration
+GEMINI.md
