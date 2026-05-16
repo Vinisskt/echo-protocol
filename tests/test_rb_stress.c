@@ -25,7 +25,7 @@ void test_bit_loss_at_boundary() {
     // No seu código atual, após o 9º bit (que só incrementa head), 
     // o 10º bit será o primeiro a ser realmente escrito no buf[tail].
     // Vamos ver o que tem no segundo byte (que deveria estar começando a ser formado)
-    printf("Estado após 10 bits: buf[0]=0x%02X, count=%d, head=%d\n", rb->buf[0], rb->count, rb->head);
+    printf("Estado após 10 bits: buf[0]=0x%02X, count_put=%d, head=%d\n", rb->buf[0], rb->count_put, rb->head);
     
     // Se não houver perda, o bit_zero e bit_one deveriam estar lá.
     // Como a função usa tail fixo em 0 e head avança, isso vai gerar confusão no buffer.
@@ -41,7 +41,8 @@ void test_memory_garbage_pollution() {
     memset(rb->buf, 0xFF, BUFFER_SIZE);
     rb->head = 0;
     rb->tail = 0;
-    rb->count = 0;
+    rb->count_put = 0;
+    rb->count_get = 0;
 
     uint8_t bit = 0; // Queremos formar um byte 0x00
     for(int i=0; i<8; i++) put_bits(rb, &bit);

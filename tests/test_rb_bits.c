@@ -17,14 +17,14 @@ void test_put_bits_individual_bits() {
     }
 
     assert(rb->head == 0);
-    assert(rb->count == 8);
+    assert(rb->count_put == 8);
     assert(rb->buf[rb->tail] == 0xAA);
 
     uint8_t extra_bit = 0;
     uint8_t res_extra = put_bits(rb, &extra_bit);
     assert(res_extra == 1);
     assert(rb->head == 1);
-    assert(rb->count == 0);
+    assert(rb->count_put == 1);
 
     printf("Teste de inserção bit-a-bit passou!\n");
     free(rb);
