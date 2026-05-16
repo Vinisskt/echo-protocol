@@ -9,8 +9,9 @@ Documentação técnica das funções de manipulação de buffer circular em ní
 typedef struct {
     uint8_t buf[BUFFER_SIZE]; // Array de dados (1024 bytes)
     uint16_t head;            // Índice de escrita (byte atual)
-    uint16_t tail;            // Índice de leitura
-    uint8_t count;            // Contador de bits no byte atual (0-7)
+    uint16_t tail;            // Índice de leitura (byte atual)
+    uint8_t count_put;        // Contador de bits inseridos no byte head (0-7)
+    uint8_t count_get;        // Contador de bits consumidos no byte tail (0-7)
 } Buffer;
 ```
 
@@ -34,6 +35,16 @@ typedef struct {
     - `1`: Sucesso na inserção.
     - `0`: Buffer cheio.
 - **Lógica de Agrupamento:** O bit é inserido no byte apontado por `head` usando deslocamento para a esquerda (`<<`). Quando 8 bits são acumulados, `head` avança para a próxima posição.
+
+### `get_bits(Buffer *buf, uint8_t *bit)`
+- **Descrição:** Extrai um bit individual do buffer.
+- **Argumentos:**
+    - `buf`: Ponteiro para o buffer.
+    - `bit`: Ponteiro para armazenar o bit extraído (0 ou 1).
+- **Retorno:**
+    - `1`: Sucesso na extração.
+    - `0`: Buffer vazio.
+- **Lógica de Extração:** O bit é extraído do byte apontado por `tail`. Quando 8 bits são consumidos, `tail` avança para a próxima posição.
 
 ## Verificação e Testes (Resultados)
 
