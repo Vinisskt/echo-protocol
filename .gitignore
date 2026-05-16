@@ -1,16 +1,13 @@
-# Binary files
+# Binary files and executables
 *.o
 *.out
+*.bin
 *.exe
 build/
 bin/
-test_rb
-test_rb_stress
-test_get
-test_get_stress
 
-# Project-specific binaries (if named after directories or common patterns)
-echo-server
-echo-client
+# Test binaries (if not covered by patterns above)
+tests/*.bin
+tests/*.out
 # Gemini configuration
 GEMINI.md
