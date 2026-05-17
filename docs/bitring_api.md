@@ -54,8 +54,9 @@ Foram realizados testes de estresse para garantir a integridade dos dados em ní
 2.  **Fronteira de Byte:** Validado que nenhum bit é perdido na transição entre um byte e outro (o 9º bit é salvo corretamente no início do novo byte).
 3.  **Limpeza de Memória:** Confirmado que cada novo byte é zerado antes da escrita, evitando corrupção por lixo de memória do `malloc`.
 4.  **Buffer Cheio:** O sistema detecta corretamente o estado de buffer cheio usando a máscara `BUFFER_MASK (1023)`.
+5.  **Fluxo Contínuo (Stress):** Validado via `test_rb_flow_stress.c`, processando 100.000 bits em ciclos de produção/consumo. Confirmado que o *wrap-around* dos ponteiros `head` e `tail` não causa perda de bits nem corrupção de memória sob carga contínua.
 
 ### Status Atual
 - **Estabilidade:** Alta
-- **Precisão de Bit:** 100% (Verificado via `test_rb_stress.c`)
-- **Eficiência:** Uso de `uint16_t` para índices, otimizando memória.
+- **Precisão de Bit:** 100% (Verificado via `test_rb_stress.c` e `test_rb_flow_stress.c`)
+- **Eficiência:** Uso de `uint16_t` para índices e máscaras bitwise para controle de rotação.
