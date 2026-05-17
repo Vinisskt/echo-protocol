@@ -1,6 +1,7 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -I../include
-SRC = ../src/rb_bits.c
+LDFLAGS = -lm
+SRC = ../src/rb_bits.c ../src/mod_afsk.c
 TEST_SRCS = $(wildcard test_*.c)
 TEST_BINS = $(TEST_SRCS:.c=.bin)
 
@@ -9,7 +10,7 @@ TEST_BINS = $(TEST_SRCS:.c=.bin)
 all: $(TEST_BINS)
 
 %.bin: %.c $(SRC)
-	$(CC) $(CFLAGS) $< $(SRC) -o $@
+	$(CC) $(CFLAGS) $< $(SRC) -o $@ $(LDFLAGS)
 
 run_tests: all
 	@for test in $(TEST_BINS); do \
