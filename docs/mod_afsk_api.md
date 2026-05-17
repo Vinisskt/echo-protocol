@@ -41,6 +41,18 @@ typedef struct {
     - Garante a **Continuidade de Fase (CPFSK)**, evitando cliques ou ruídos na transição entre bits.
 - **Orquestração:** Esta função é "pura" em relação ao processamento de sinal; ela não consome bits do buffer circular. O chamador (orquestrador) é responsável por manter o mesmo ponteiro de bit durante as `SAMPLES_PER_BIT` (40 amostras por padrão).
 
+### `push_preamble(Buffer *buf)`
+- **Descrição:** Insere o preâmbulo de sincronismo de clock (16 bits alternados `1010...`) no buffer.
+- **Argumentos:**
+    - `buf`: Ponteiro para o Ring Buffer.
+- **Finalidade:** Permite que o receptor sincronize seu clock de bits antes do início dos dados reais.
+
+### `push_sync_word(Buffer *buf)`
+- **Descrição:** Insere a palavra de sincronismo de frame (32 bits, `0x930B51DE`) no buffer.
+- **Argumentos:**
+    - `buf`: Ponteiro para o Ring Buffer.
+- **Finalidade:** Marca o ponto exato de início do payload, permitindo o alinhamento de byte no receptor.
+
 ## Arquitetura e Performance
 
 1.  **Separação de Camadas:** A biblioteca de modulação é isolada da camada de dados (`Buffer`). Isso permite que ela seja usada em sistemas de tempo real, como interrupções de áudio.
