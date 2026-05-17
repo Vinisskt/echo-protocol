@@ -2,6 +2,29 @@
 #include <stdint.h>
 #include <math.h>
 
+#define SIZE_PREAMBLE 16 - 1
+#define SIZE_SYNC_WORD 32 - 1
+
+void push_preamble(Buffer *buf) {
+
+	uint8_t bit;
+	for (int i = SIZE_PREAMBLE; i >= 0; i--) {
+		bit = (PREAMBLE >> i) & 1;
+		put_bits(buf, &bit);
+	}
+	return;
+}
+
+void push_sync_word(Buffer *buf) {
+	
+	uint8_t bit;
+	for (int i = SIZE_SYNC_WORD; i >= 0; i--) {
+		bit = (SYNC_WORD >> i) & 1;
+		put_bits(buf, &bit);
+	}
+	return;
+}
+
 void pre_calc_afsk(StateAFSK *state) {
 	float samples_space = (float) (2.0 * M_PI * FREQ_SPACE) / SAMPLE_RATE;
 	float samples_mark = (float) (2.0 * M_PI * FREQ_MARK) / SAMPLE_RATE;

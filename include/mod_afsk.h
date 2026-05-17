@@ -10,7 +10,7 @@
 #define SYNC_WORD 0x930B51DE
 #define BIT_RATE 1200
 #define SAMPLES_PER_BIT (SAMPLE_RATE / BIT_RATE)
-#define PREAMBLE 1010101010101010
+#define PREAMBLE 0xAAAA
 
 typedef struct {
 	float step_cos_space;
@@ -24,6 +24,8 @@ typedef struct {
 
 void pre_calc_afsk(StateAFSK *state);
 void generate_afsk(StateAFSK *state, uint8_t *bit);
+void push_preamble(Buffer *buf); 
+void push_sync_word(Buffer *buf);
 
 #endif // MOD_AFSK_H
 
