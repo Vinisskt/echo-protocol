@@ -1,3 +1,6 @@
+#ifndef MOD_AFSK_H
+#define MOD_AFSK_H
+
 #include "../include/rb_bits.h"
 #include <stdint.h>
 
@@ -21,4 +24,6 @@ typedef struct {
 
 void pre_calc_afsk(StateAFSK *state);
 void generate_afsk(StateAFSK *state, uint8_t *bit);
+
+#endif // MOD_AFSK_H
 

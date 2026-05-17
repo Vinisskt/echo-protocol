@@ -1,7 +1,10 @@
+#ifndef RB_BITS_H
+#define RB_BITS_H
+
 #include <stdint.h>
 
 #define BUFFER_SIZE 1024
-#define BUFFER_MASK 1023
+#define BUFFER_MASK (BUFFER_SIZE - 1)
 
 typedef struct {
 	uint8_t buf[BUFFER_SIZE];
@@ -15,3 +18,5 @@ Buffer* rb_init();
 uint8_t check_rb(Buffer *buf);
 uint8_t put_bits(Buffer *buf, uint8_t *bit);
 uint8_t get_bits(Buffer *buf, uint8_t *bit);
+
+#endif // RB_BITS_H
