@@ -11,15 +11,15 @@ The protocol leverages several key technologies to achieve reliable data transmi
 * Bit-level Ring Buffer: Custom high-performance buffer management for raw bitstreams.
 * TUN/TAP Interface: Seamless integration with the Linux network stack.
 
-## Status do Projeto
+## Project Status
 
-*   **Ring Buffer:** 100% Funcional (Manipulação de bits).
-*   **Modulação AFSK:** 100% Funcional (Fase contínua).
-*   **Demodulação AFSK:** 100% Funcional (Algoritmo de Goertzel).
+*   **Ring Buffer:** 100% Functional (Bit manipulation).
+*   **AFSK Modulation:** 100% Functional (Continuous phase).
+*   **AFSK Demodulation:** 100% Functional (Goertzel algorithm).
 
-## Resiliência
+## Resilience
 
-O sistema demonstrou alta confiabilidade em ambientes ruidosos, mantendo **0% de erro de bit (BER)** em testes de estresse com até **125% de ruído branco** em relação à amplitude do sinal original.
+The system has demonstrated high reliability in noisy environments, maintaining **0% bit error rate (BER)** in stress tests with up to **125% white noise** relative to the original signal amplitude.
 
 ## Development Standards
 
