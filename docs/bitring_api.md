@@ -34,7 +34,7 @@ typedef struct {
 - **Retorno:**
     - `1`: Sucesso na inserção.
     - `0`: Buffer cheio.
-- **Lógica de Agrupamento:** O bit é inserido no byte apontado por `head` usando deslocamento para a esquerda (`<<`). Quando 8 bits são acumulados, `head` avança para a próxima posição.
+- **Lógica de Agrupamento (LSB):** O bit é inserido no byte apontado por `head` usando deslocamento para a esquerda (`<<`) baseado no contador `count_put`. Quando 8 bits são acumulados, `head` avança.
 
 ### `get_bits(Buffer *buf, uint8_t *bit)`
 - **Descrição:** Extrai um bit individual do buffer.
@@ -44,19 +44,19 @@ typedef struct {
 - **Retorno:**
     - `1`: Sucesso na extração.
     - `0`: Buffer vazio.
-- **Lógica de Extração:** O bit é extraído do byte apontado por `tail`. Quando 8 bits são consumidos, `tail` avança para a próxima posição.
+- **Lógica de Extração (LSB):** O bit é extraído do byte apontado por `tail` usando deslocamento para a direita (`>>`) baseado no contador `count_get`. Quando 8 bits são consumidos, `tail` avança.
 
 ## Verificação e Testes (Resultados)
 
-Foram realizados testes de estresse para garantir a integridade dos dados em nível de bit:
+Foram realizados testes de estresse para garantir a integridade dos dados em nível de bit sob a convenção LSB:
 
-1.  **Inserção Bit-a-Bit:** Confirmado que os bits são agrupados corretamente (ex: `10101010` vira `0xAA`).
-2.  **Fronteira de Byte:** Validado que nenhum bit é perdido na transição entre um byte e outro (o 9º bit é salvo corretamente no início do novo byte).
-3.  **Limpeza de Memória:** Confirmado que cada novo byte é zerado antes da escrita, evitando corrupção por lixo de memória do `malloc`.
-4.  **Buffer Cheio:** O sistema detecta corretamente o estado de buffer cheio usando a máscara `BUFFER_MASK (1023)`.
-5.  **Fluxo Contínuo (Stress):** Validado via `test_rb_flow_stress.c`, processando 100.000 bits em ciclos de produção/consumo. Confirmado que o *wrap-around* dos ponteiros `head` e `tail` não causa perda de bits nem corrupção de memória sob carga contínua.
+1.  **Inserção Bit-a-Bit (LSB):** Confirmado que os bits são agrupados corretamente começando pelo bit menos significativo.
+2.  **Fronteira de Byte:** Validado que a transição entre bytes mantém a ordem correta dos bits.
+3.  **Limpeza de Memória:** Confirmado que cada novo byte é zerado antes da escrita.
+4.  **Buffer Cheio:** O sistema detecta corretamente o estado de buffer cheio usando a máscara `BUFFER_MASK`.
+5.  **Fluxo Contínuo (Stress):** Validado via `test_rb_flow_stress.c` e `test_rb_to_tun_stress.c`, processando fluxos contínuos de pacotes sem perda de integridade.
 
 ### Status Atual
 - **Estabilidade:** Alta
-- **Precisão de Bit:** 100% (Verificado via `test_rb_stress.c` e `test_rb_flow_stress.c`)
+- **Precisão de Bit:** 100%
 - **Eficiência:** Uso de `uint16_t` para índices e máscaras bitwise para controle de rotação.
