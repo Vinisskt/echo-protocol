@@ -6,6 +6,9 @@
 #include "mod_afsk.h"
 #include "demod_afsk.h"
 
+#define SIZE_BUF 2048
+#define SIZE_BYTE 8
+
 typedef struct {
     int tun_fd;
     Buffer *tx_rb;
@@ -13,14 +16,15 @@ typedef struct {
     StateAFSK mod_state;
     StateGoertzel space_state;
     StateGoertzel mark_state;
+    uint16_t rx_sample_count;
     uint32_t sync_accumulator;
 } EchoProtocol;
 
 int echo_init(EchoProtocol *echo, char *dev_name);
 void echo_close(EchoProtocol *echo);
 void tun_to_rb(EchoProtocol *echo);
-float rb_to_audio(EchoProtocol *echo);
+void rb_to_tun(EchoProtocol *echo, int *packet_len);
+void rb_to_audio(EchoProtocol *echo, uint8_t *bit);
 void audio_to_rb(EchoProtocol *echo, float *sample);
-void rb_to_tun(EchoProtocol *echo);
 
 #endif

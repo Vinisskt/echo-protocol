@@ -36,7 +36,7 @@ uint8_t put_bits(Buffer *buf, uint8_t *bit) {
 		buf->count_put = 0;
 	}
 
-	buf->buf[buf->head] = (buf->buf[buf->head] << 1) | *bit;
+	buf->buf[buf->head] = buf->buf[buf->head] | (*bit << buf->count_put);
 	buf->count_put++;
 
 	return 1;
@@ -45,7 +45,7 @@ uint8_t put_bits(Buffer *buf, uint8_t *bit) {
 // consome bit do rb -> pega os byte do rb e insere bit a bit no parametro bit;
 uint8_t get_bits(Buffer *buf, uint8_t *bit) {
 
-	if ( buf->tail == buf->head && buf->count_get == buf->count_put ) {
+	if ( buf->tail == buf->head && buf->count_get == buf->count_put) {
 		// buffer empty
 		return 0;
 	}
@@ -55,7 +55,7 @@ uint8_t get_bits(Buffer *buf, uint8_t *bit) {
 		buf->count_get = 0;
 	}
 
-	*bit = (buf->buf[buf->tail] >> (7 - buf->count_get)) & 1;
+	*bit = (buf->buf[buf->tail] >> buf->count_get) & 1;
 	buf->count_get++;
 	return 1;
 }

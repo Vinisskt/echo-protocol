@@ -32,3 +32,9 @@ float process_goertzel(StateGoertzel *state, float *sample) {
 	
 	return (state->q1 * state->q1) + (state->q2 * state->q2) - (state->q1 * state->q2 * state->coeff);
 }
+
+void reset_state(StateGoertzel *state) {
+	state->q1 = 0.0f;
+	state->q2 = 0.0f;
+	return;
+}
