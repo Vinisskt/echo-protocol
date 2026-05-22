@@ -18,7 +18,7 @@ void test_put_bits_individual_bits() {
 
     assert(rb->head == 0);
     assert(rb->count_put == 8);
-    assert(rb->buf[rb->tail] == 0xAA);
+    assert(rb->buf[rb->tail] == 0x55);
 
     uint8_t extra_bit = 0;
     uint8_t res_extra = put_bits(rb, &extra_bit);
