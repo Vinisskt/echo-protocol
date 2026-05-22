@@ -61,7 +61,6 @@ void audio_to_rb(EchoProtocol *echo, float *sample) {
 
     if (echo->rx_sample_count == SAMPLES_PER_BIT - 1) {
         uint8_t bit = (mag_mark > mag_space) ? 1 : 0;
-        printf("%f\n%f\n", mag_mark, mag_space);
         put_bits(echo->rx_rb, &bit);
     }
 
