@@ -9,13 +9,12 @@
 
 /**
  * Teste de Validação: rb_to_tun com Cabeçalho IPv4 Real
- * 
- * Este teste envia um fluxo de bits que representa um pacote IPv4 ICMP (Ping)
- * para a função rb_to_tun. Ele valida:
- * 1. Reconstrução de bits para bytes.
- * 2. Identificação do tamanho do pacote (via cabeçalho IP).
- * 3. Escrita correta no descritor do TUN.
  */
+
+void stack_poison() {
+    uint8_t garbage[2048];
+    memset(garbage, 0xFF, sizeof(garbage));
+}
 
 int main() {
     printf("--- Teste de Validação: rb_to_tun (IPv4) ---\n");
@@ -31,7 +30,7 @@ int main() {
     // Inicialização manual para o teste
     memset(&echo, 0, sizeof(EchoProtocol));
     echo.tun_fd = pipefd[1];
-    echo.rx_rb = rb_init(); // Inicializar o buffer!
+    echo.rx_rb = rb_init();
     
     // Configurar leitura não bloqueante
     fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
@@ -52,7 +51,6 @@ int main() {
     for (int iter = 0; iter < num_iterations; iter++) {
         printf("\n--- Iteração %d ---\n", iter + 1);
         
-        // Modificar um byte do payload para garantir que os dados mudam
         base_packet[packet_len - 1] = (uint8_t)iter;
         
         printf("Inserindo pacote IPv4 de %d bytes no RX_RB...\n", packet_len);
@@ -63,7 +61,8 @@ int main() {
             }
         }
 
-        printf("Chamando rb_to_tun...\n");
+        printf("Chamando rb_to_tun (com stack poison)...\n");
+        stack_poison();
         rb_to_tun(&echo, &packet_len);
 
         // 2. Verificar o resultado no pipe
@@ -88,5 +87,6 @@ int main() {
 
     close(pipefd[0]);
     close(pipefd[1]);
+    free(echo.rx_rb);
     return 0;
 }
