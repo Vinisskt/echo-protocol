@@ -9,6 +9,20 @@
 #define SIZE_BUF 2048
 #define SIZE_BYTE 8
 
+typedef enum {
+    SEARCHING,
+    DATA
+} RxStatus;
+
+typedef struct {
+    RxStatus state;
+    uint32_t sync_accumulator;
+    uint16_t rx_sample_count;
+    uint16_t bits_received;
+    uint16_t packet_len;
+    uint64_t header_accumulator;
+} RxState;
+
 typedef struct {
     int tun_fd;
     Buffer *tx_rb;
@@ -16,8 +30,7 @@ typedef struct {
     StateAFSK mod_state;
     StateGoertzel space_state;
     StateGoertzel mark_state;
-    uint16_t rx_sample_count;
-    uint32_t sync_accumulator;
+    RxState rx;
 } EchoProtocol;
 
 int echo_init(EchoProtocol *echo, char *dev_name);
