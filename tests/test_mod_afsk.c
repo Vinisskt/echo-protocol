@@ -64,7 +64,7 @@ void test_frequency_consistency() {
     StateAFSK state;
     pre_calc_afsk(&state);
     
-    uint8_t bit = 1; // Mark (2400Hz)
+    uint8_t bit = 1; // Mark
 
     float last_phase = atan2f(state.current_sin, state.current_cos);
     
@@ -79,13 +79,13 @@ void test_frequency_consistency() {
         
         float expected_delta = (2.0f * M_PI * FREQ_MARK) / SAMPLE_RATE;
         
-        // Verifica se a variação de fase corresponde à frequência de 2400Hz
+        // Verifica se a variação de fase corresponde à frequência correta
         assert(fabsf(delta - expected_delta) < 0.001f);
         
         last_phase = current_phase;
     }
     
-    printf("Frequência Mark (2400Hz) consistente com a função real!\n");
+    printf("Frequência Mark (%dHz) consistente com a função real!\n", FREQ_MARK);
 }
 
 int main() {
