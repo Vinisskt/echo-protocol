@@ -10,8 +10,9 @@ int main() {
     echo.rx_rb = rb_init();
     pre_calc_goertzel(&echo.space_state, (uint16_t[]){FREQ_SPACE});
     pre_calc_goertzel(&echo.mark_state, (uint16_t[]){FREQ_MARK});
-    echo.rx_sample_count = 0; 
-
+    echo.rx.state = DATA; // Adicionado: Permitir inserção direta de bits para teste de unidade
+    echo.rx.rx_sample_count = 0; 
+    echo.rx.packet_len = 100; // Garantir que não volte para SEARCHING prematuramente
     float phase = 0;
     float step = (2.0f * M_PI * FREQ_MARK) / SAMPLE_RATE;
 
@@ -19,11 +20,6 @@ int main() {
     for (int i = 0; i < 40; i++) {
         float sample = sinf(phase);
         audio_to_rb(&echo, &sample);
-        
-        echo.rx_sample_count++;
-        if (echo.rx_sample_count >= 40) {
-            echo.rx_sample_count = 0;
-        }
         phase += step;
     }
 
@@ -39,7 +35,7 @@ int main() {
         }
     } else {
         printf("[FALHA CRÍTICA] O buffer está VAZIO. A função audio_to_rb não inseriu o bit.\n");
-        printf("Dica: Verifique se a checagem 'if (echo->rx_sample_count == ...)' está batendo com o valor %d na 40ª amostra.\n", echo.rx_sample_count);
+        printf("Dica: Verifique se a checagem 'if (echo->rx_sample_count == ...)' está batendo com o valor %d na 40ª amostra.\n", echo.rx.rx_sample_count);
     }
 
     return 0;
