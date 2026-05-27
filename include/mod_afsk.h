@@ -23,7 +23,7 @@ typedef struct {
 } StateAFSK;
 
 void pre_calc_afsk(StateAFSK *state);
-void generate_afsk(StateAFSK *state, uint8_t *bit);
+float generate_afsk(StateAFSK *state, uint8_t *bit);
 void push_preamble(Buffer *buf); 
 void push_sync_word(Buffer *buf);
 
