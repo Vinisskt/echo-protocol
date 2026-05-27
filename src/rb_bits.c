@@ -5,6 +5,9 @@
 
 Buffer* rb_init() {
 	Buffer *buf = malloc(sizeof(Buffer));
+	if (buf == NULL) {
+		return NULL;
+	}
 	buf->head = 0;
 	buf->tail = 0;
 	buf->buf[buf->head] = 0;
@@ -13,20 +16,8 @@ Buffer* rb_init() {
 	return buf;
 }
 
-uint8_t check_rb(Buffer *buf) {
-	if (buf == NULL) {
-		printf("[Error] allocating memory");
-		return 1;
-	}
-	return 0;
-}
-
-
-// insere bits no rb -> inserindo bit a bit em um byte;
 uint8_t put_bits(Buffer *buf, uint8_t *bit) {
-	
-	if ( ((buf->head + 1) & BUFFER_MASK) == buf->tail) {
-		// buffer full
+	if (((buf->head + 1) & BUFFER_MASK) == buf->tail) {
 		return 0;
 	}
 	
@@ -36,17 +27,14 @@ uint8_t put_bits(Buffer *buf, uint8_t *bit) {
 		buf->count_put = 0;
 	}
 
-	buf->buf[buf->head] = buf->buf[buf->head] | (*bit << buf->count_put);
+	buf->buf[buf->head] |= (*bit << buf->count_put);
 	buf->count_put++;
 
 	return 1;
 }
 
-// consome bit do rb -> pega os byte do rb e insere bit a bit no parametro bit;
 uint8_t get_bits(Buffer *buf, uint8_t *bit) {
-
-	if ( buf->tail == buf->head && buf->count_get == buf->count_put) {
-		// buffer empty
+	if (buf->tail == buf->head && buf->count_get == buf->count_put) {
 		return 0;
 	}
 
