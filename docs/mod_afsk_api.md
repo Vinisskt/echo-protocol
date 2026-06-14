@@ -1,71 +1,54 @@
 # API de Modulação AFSK (Audio Frequency Shift Keying)
 
-Documentação técnica das funções de geração de sinal de áudio modulado por deslocamento de frequência para o Echo Protocol.
+Documentação técnica das funções de geração de sinal de áudio para o Echo Protocol, otimizada para alta velocidade e estabilidade.
 
 ## Estrutura de Dados
 
 ### `StateAFSK`
-Esta estrutura armazena o estado interno do modulador, garantindo a continuidade da fase entre amostras e bits.
+Armazena o estado do modulador, garantindo a continuidade da fase entre amostras e bits (**CPFSK**).
 
 ```c
-typedef struct {
-    float step_cos_space; // Pré-cálculo da variação de cosseno para Space (1200Hz)
-    float step_cos_mark;  // Pré-cálculo da variação de cosseno para Mark (2400Hz)
-    float step_sin_space; // Pré-cálculo da variação de seno para Space (1200Hz)
-    float step_sin_mark;  // Pré-cálculo da variação de seno para Mark (2400Hz)
-    float current_sin;    // Estado atual da fase (componente Seno)
-    float current_cos;    // Estado atual da fase (componente Cosseno)
-    uint16_t sample_count; // Contador de amostras geradas para o bit atual (0-39)
+typedef struct StateAFSK_s {
+    float step_cos_space; // Pré-cálculo para Space (2400Hz)
+    float step_cos_mark;  // Pré-cálculo para Mark (4800Hz)
+    float step_sin_space; 
+    float step_sin_mark;  
+    float current_sin;    // Estado da fase seno
+    float current_cos;    // Estado da fase cosseno
+    uint16_t sample_count; // Controle de tempo do bit
 } StateAFSK;
 ```
 
 ## Funções Principais
 
 ### `pre_calc_afsk(StateAFSK *state)`
-- **Descrição:** Pré-calcula os coeficientes trigonométricos baseados nas frequências definidas e inicializa o estado de fase.
-- **Argumentos:**
-    - `state`: Ponteiro para a estrutura de estado.
-- **Constantes Utilizadas:**
-    - `FREQ_SPACE`: 1200 Hz
-    - `FREQ_MARK`: 2400 Hz
+- **Descrição:** Calcula os coeficientes trigonométricos e inicializa o estado de fase.
+- **Parâmetros de Operação:**
+    - `FREQ_SPACE`: **2400 Hz**
+    - `FREQ_MARK`: **4800 Hz**
+    - `BIT_RATE`: **1800 bps** (estável até 2400 bps)
     - `SAMPLE_RATE`: 48000 Hz
-- **Efeito:** Inicializa `current_cos` em 1.0 e `current_sin` em 0.0 para garantir que o sinal comece no início da fase.
 
 ### `generate_afsk(StateAFSK *state, uint8_t *bit)`
-- **Descrição:** Gera uma única amostra de áudio (seno/cosseno) baseada no bit fornecido.
-- **Argumentos:**
-    - `state`: Ponteiro para a estrutura de estado.
-    - `bit`: Ponteiro para o bit (0 para Space, 1 para Mark).
-- **Lógica de Modulação:**
-    - Utiliza o método de rotação complexa para atualizar `current_cos` e `current_sin` sem a necessidade de chamar funções pesadas como `sin()` ou `cos()` a cada amostra.
-    - Garante a **Continuidade de Fase (CPFSK)**, evitando cliques ou ruídos na transição entre bits.
-- **Orquestração:** Esta função é "pura" em relação ao processamento de sinal; ela não consome bits do buffer circular. O chamador (orquestrador) é responsável por manter o mesmo ponteiro de bit durante as `SAMPLES_PER_BIT` (40 amostras por padrão).
+- **Descrição:** Gera uma amostra de áudio individual baseada no bit.
+- **Amplitude:** O sinal é multiplicado por **0.5f** (50% de ganho) para evitar distorção (clipping) nas placas de som e facilitar a detecção pelo receptor.
+- **Fase Contínua:** Utiliza rotação complexa para garantir que não haja saltos de fase na troca de bits, eliminando ruídos de alta frequência.
 
 ### `push_preamble(Buffer *buf)`
-- **Descrição:** Insere o preâmbulo de sincronismo de clock (16 bits alternados `1010...`) no buffer.
-- **Argumentos:**
-    - `buf`: Ponteiro para o Ring Buffer.
-- **Finalidade:** Permite que o receptor sincronize seu clock de bits antes do início dos dados reais.
+- **Descrição:** Insere um preâmbulo de **24 bits** (`1010...`).
+- **Finalidade:** Fornece uma janela de sincronização suficiente para que o receptor estabilize o clock de bits antes de pacotes longos (até MTU 1000).
 
 ### `push_sync_word(Buffer *buf)`
-- **Descrição:** Insere a palavra de sincronismo de frame (32 bits, `0x930B51DE`) no buffer.
-- **Argumentos:**
-    - `buf`: Ponteiro para o Ring Buffer.
-- **Finalidade:** Marca o ponto exato de início do payload, permitindo o alinhamento de byte no receptor.
+- **Descrição:** Insere a palavra de sincronismo de frame de 32 bits (`0x930B51DE`).
 
-## Arquitetura e Performance
+## Performance e Estabilidade
 
-1.  **Separação de Camadas:** A biblioteca de modulação é isolada da camada de dados (`Buffer`). Isso permite que ela seja usada em sistemas de tempo real, como interrupções de áudio.
-2.  **Eficiência Matemática:** A atualização da fase via rotação matricial (`next_cos = cos*step_cos - sin*step_sin`) é significativamente mais rápida que o cálculo direto de funções trigonométricas em loops.
-3.  **Amostragem:** Otimizado para 48kHz, proporcionando 40 amostras por bit a uma taxa de 1200bps.
+1.  **Bitrate Calibrado:** A taxa de 1800 bps permite que cada bit tenha ciclos de onda suficientes para uma detecção robusta via Goertzel, mesmo em cabos virtuais ou ambientes ruidosos.
+2.  **Separação de Frequência:** O uso de 2.4kHz e 4.8kHz (oitavas) minimiza a interferência harmônica entre os tons de 0 e 1.
+3.  **Eficiência Matemática:** A geração de senoides via rotação complexa (`next_sin = current_sin*cos_step + current_cos*sin_step`) economiza CPU ao evitar chamadas repetitivas a `sinf()`.
 
-## Verificação e Testes
+## Verificação
 
-A biblioteca foi validada através de testes de rigor em `test_mod_afsk.c`:
-- **Consistência de Fase:** Verificado que a variação angular entre amostras corresponde exatamente à frequência desejada (0.314 rad para 2400Hz).
-- **Stress de Orquestração:** Validado em fluxo contínuo de 100.000 bits sem desvio de frequência ou corrupção de estado.
-
-### Status Atual
-- **Estabilidade:** Alta
-- **Arquitetura:** DSP puro (Single sample processing)
-- **Fase:** Contínua (Zero clicks)
+O modulador foi testado para:
+- **Zero Clipping:** Saída estabilizada em ±0.5.
+- **Continuidade:** Verificação visual do espectro de sinal sem transientes abruptos.
