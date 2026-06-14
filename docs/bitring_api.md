@@ -1,62 +1,38 @@
 # API do Bit Ring Buffer
 
-Documentação técnica das funções de manipulação de buffer circular em nível de bit para o Echo Protocol.
+Documentação técnica do mecanismo de filas circulares por bit, o coração do desacoplamento de dados no Echo Protocol.
 
 ## Estrutura de Dados
 
 ### `Buffer`
 ```c
+#define BUFFER_SIZE 8192 // 8KB de capacidade por canal (TX/RX)
+
 typedef struct {
-    uint8_t buf[BUFFER_SIZE]; // Array de dados (1024 bytes)
-    uint16_t head;            // Índice de escrita (byte atual)
-    uint16_t tail;            // Índice de leitura (byte atual)
-    uint8_t count_put;        // Contador de bits inseridos no byte head (0-7)
-    uint8_t count_get;        // Contador de bits consumidos no byte tail (0-7)
+    uint8_t buf[BUFFER_SIZE]; 
+    uint16_t head;            // Escrita (Byte)
+    uint16_t tail;            // Leitura (Byte)
+    uint8_t count_put;        // Offset de bit (Escrita)
+    uint8_t count_get;        // Offset de bit (Leitura)
 } Buffer;
 ```
 
-## Funções Principais
-
-### `rb_init()`
-- **Descrição:** Aloca e inicializa um novo buffer circular.
-- **Retorno:** Ponteiro para a struct `Buffer`.
-- **Detalhes:** Zera o primeiro byte e os índices de controle.
-
-### `check_rb(Buffer *buf)`
-- **Descrição:** Verifica se o buffer foi alocado corretamente.
-- **Retorno:** `0` se OK, `1` se houver erro de alocação.
+## Funções e Lógica
 
 ### `put_bits(Buffer *buf, uint8_t *bit)`
-- **Descrição:** Insere um bit individual no buffer, agrupando-os em bytes.
-- **Argumentos:** 
-    - `buf`: Ponteiro para o buffer.
-    - `bit`: Ponteiro para o bit (0 ou 1) a ser inserido.
-- **Retorno:**
-    - `1`: Sucesso na inserção.
-    - `0`: Buffer cheio.
-- **Lógica de Agrupamento (LSB):** O bit é inserido no byte apontado por `head` usando deslocamento para a esquerda (`<<`) baseado no contador `count_put`. Quando 8 bits são acumulados, `head` avança.
+- **Lógica LSB (Least Significant Bit):** Os bits são inseridos da direita para a esquerda dentro de cada byte. 
+- **Decoupling:** Esta função permite que o loop principal insira milhares de bits (como um pacote IP comprimido) instantaneamente, sem precisar esperar o tempo do áudio.
 
 ### `get_bits(Buffer *buf, uint8_t *bit)`
-- **Descrição:** Extrai um bit individual do buffer.
-- **Argumentos:**
-    - `buf`: Ponteiro para o buffer.
-    - `bit`: Ponteiro para armazenar o bit extraído (0 ou 1).
-- **Retorno:**
-    - `1`: Sucesso na extração.
-    - `0`: Buffer vazio.
-- **Lógica de Extração (LSB):** O bit é extraído do byte apontado por `tail` usando deslocamento para a direita (`>>`) baseado no contador `count_get`. Quando 8 bits são consumidos, `tail` avança.
+- **Uso no Callback:** É chamada pela thread de áudio a cada 1/1800 de segundo. 
+- **Idle State:** Se retornar `0` (vazio), o modulador deve assumir um estado de repouso (frequência Mark) para manter a portadora sincronizada.
 
-## Verificação e Testes (Resultados)
+## Por que 8KB?
 
-Foram realizados testes de estresse para garantir a integridade dos dados em nível de bit sob a convenção LSB:
+Aumentamos o `BUFFER_SIZE` de 1KB para **8KB** por três motivos principais:
+1.  **MTU 1000:** Um pacote IP cheio gera 8000 bits. Precisamos de espaço para pelo menos um pacote inteiro + o preâmbulo.
+2.  **Retransmissão TCP:** O SSH pode disparar vários pacotes de uma vez. O buffer de 8KB age como uma "represa", absorvendo a pressão da rede e liberando os bipes de som em um fluxo constante.
+3.  **LZ4 Efficiency:** Permite lidar com blocos de descompressão maiores sem risco de overflow.
 
-1.  **Inserção Bit-a-Bit (LSB):** Confirmado que os bits são agrupados corretamente começando pelo bit menos significativo.
-2.  **Fronteira de Byte:** Validado que a transição entre bytes mantém a ordem correta dos bits.
-3.  **Limpeza de Memória:** Confirmado que cada novo byte é zerado antes da escrita.
-4.  **Buffer Cheio:** O sistema detecta corretamente o estado de buffer cheio usando a máscara `BUFFER_MASK`.
-5.  **Fluxo Contínuo (Stress):** Validado via `test_rb_flow_stress.c` e `test_rb_to_tun_stress.c`, processando fluxos contínuos de pacotes sem perda de integridade.
-
-### Status Atual
-- **Estabilidade:** Alta
-- **Precisão de Bit:** 100%
-- **Eficiência:** Uso de `uint16_t` para índices e máscaras bitwise para controle de rotação.
+## Estabilidade de Memória
+- **Zero Alocação Dinâmica no Loop:** Os buffers são alocados no `echo_init` e reutilizados durante toda a sessão, garantindo que o programa nunca trave por falta de memória (OOM) ou latência de Garbage Collector.
