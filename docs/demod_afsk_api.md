@@ -1,55 +1,47 @@
 # API de Demodulação AFSK (Goertzel)
 
-Documentação técnica das funções de detecção de sinal e recuperação de dados via algoritmo de Goertzel para o Echo Protocol.
+Documentação técnica do motor de recepção do Echo Protocol, com foco em resiliência e sincronização de frames.
 
 ## Estrutura de Dados
 
 ### `StateGoertzel`
-Armazena os coeficientes pré-calculados e as variáveis de estado para a detecção de uma frequência específica.
+Representa um filtro de banda estreita otimizado para detectar tons específicos em tempo real.
 
 ```c
-typedef struct {
-    int n;          // Tamanho do bloco (SAMPLES_PER_BIT, padrão 40)
-    float k;        // Índice da frequência alvo
-    float omega;    // Frequência angular
-    float coeff;    // Coeficiente de feedback (2 * cos(omega))
-    float q1;       // Estado n-1 (Memória do filtro)
-    float q2;       // Estado n-2 (Memória do filtro)
+typedef struct StateGoertzel_s {
+    int n;          // Janela de integração (SAMPLES_PER_BIT)
+    float k, omega, coeff, q1, q2; 
 } StateGoertzel;
 ```
 
+### `RxState` (Estado de Recepção)
+Gerencia o fluxo de bits desde a detecção até a montagem do pacote IP:
+- `state`: SEARCHING ou DATA.
+- `packet_ready`: Flag atômica para notificar o loop principal.
+- `last_rx_time`: Timestamp do último bit recebido (usado para timeout).
+- `is_compressed`: Flag indicando se o payload atual usa LZ4.
+
 ## Funções Principais
 
-### `pre_calc_goertzel(StateGoertzel *state, uint16_t *freq)`
-- **Descrição:** Calcula os coeficientes necessários para monitorar uma frequência específica e inicializa os estados como zero.
-- **Argumentos:**
-    - `state`: Ponteiro para a estrutura de estado.
-    - `freq`: Ponteiro para a frequência alvo em Hz (ex: 1200 ou 2400).
-- **Detalhes:** Utiliza a taxa de amostragem definida no projeto (48000 Hz) e o tamanho do bloco de 40 amostras.
+### `audio_to_rb(EchoProtocol *echo, float *sample)`
+- **Descrição:** Processa cada amostra do microfone. Realiza a decisão de bit (Mark vs Space) ao completar `SAMPLES_PER_BIT`.
+- **Sincronização:** Após a decisão, chama `process_rx_bit` para gerenciar a máquina de estados de recepção.
 
-### `process_goertzel(StateGoertzel *state, float *sample)`
-- **Descrição:** Processa uma única amostra de áudio, atualizando a energia acumulada no filtro.
-- **Retorno:** A magnitude quadrática (potência) acumulada até o momento.
-- **Lógica:** Implementa o loop de feedback de Goertzel. Para obter a decisão final de um bit, deve-se ler o retorno desta função na 40ª amostra de cada bit.
+### `process_rx_bit(EchoProtocol *echo, uint8_t bit)`
+- **Sincronismo de Frame:** Monitora a janela deslizante em busca da `SYNC_WORD`.
+- **Processamento de Cabeçalho:** Ao detectar o início do frame, extrai os primeiros 16 bits:
+    - Bit 15: Flag de Compressão.
+    - Bits 14-0: Tamanho do Payload (MTU até 32KB teóricos, limitado pelo software a 1000).
+- **Timeout Automático (6s):** Se o modem entrar no estado `DATA` mas não completar o pacote em 6 segundos, ele volta para `SEARCHING`. Isso evita o travamento do terminal em caso de ruído.
 
-### `check_sync_word(uint32_t *check_word, uint8_t *bit)`
-- **Descrição:** Implementa uma janela deslizante (sliding window) de 32 bits para detectar a `SYNC_WORD` (`0x930B51DE`).
-- **Argumentos:**
-    - `check_word`: Ponteiro para um acumulador de 32 bits que persiste entre as chamadas.
-    - `bit`: Ponteiro para o bit recém-demodulado.
-- **Retorno:**
-    - `0`: Sync Word detectada (alinhamento de frame encontrado).
-    - `1`: Sync Word ainda não detectada.
+## Performance e Sincronia
 
-## Performance e Resiliência
+1.  **Frequências:** Opera em 2400Hz (Space) e 4800Hz (Mark).
+2.  **Sincronismo Atômico:** O uso de `stdatomic.h` garante que o loop principal (`main.c`) saiba exatamente quando injetar o pacote no TUN sem conflitos de memória com a thread de áudio.
+3.  **Resiliência:** O algoritmo de Goertzel é reiniciado a cada bit para evitar o acúmulo de erros de fase entre bipes.
 
-1.  **Eficiência de CPU:** O processamento de amostras utiliza apenas uma multiplicação e duas adições por canal, tornando-o ideal para sistemas de tempo real.
-2.  **Imunidade a Ruído:** Validado via `test_demod_noise_stress.c` com **0% de erro (BER)** sob condições de até **125% de ruído branco** em relação à amplitude do sinal.
-3.  **Seletividade:** A janela de 40 amostras ($N=40$) proporciona uma separação clara entre as frequências de Mark (2400Hz) e Space (1200Hz), garantindo decodificação robusta mesmo em canais degradados.
-
-## Guia de Implementação (Orquestrador)
-Para demodular um bit:
-1.  Zerar `q1` e `q2` das structs `StateGoertzel`.
-2.  Chamar `process_goertzel` 40 vezes com as amostras de áudio.
-3.  Comparar a magnitude retornada pelo canal Space (1200Hz) vs Mark (2400Hz).
-4.  O maior valor define o bit (Mark = 1, Space = 0).
+## Guia de Recuperação de Erros
+Se o terminal (`socat` ou `ssh`) parar de responder:
+- Aguarde o **RX Timeout** de 6 segundos.
+- O sistema mostrará `[RX] Timeout de recepção! Resetando...` no log.
+- Aperte **ENTER** para forçar o envio de um novo pacote de sincronismo.
