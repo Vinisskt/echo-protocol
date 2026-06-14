@@ -1,0 +1,125 @@
+#include "../include/audio_io.h"
+#include "../include/echo_protocol.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+
+static uint8_t current_tx_bit = 1;
+
+static int paCallback(const void *inputBuffer, void *outputBuffer,
+                      unsigned long framesPerBuffer,
+                      const PaStreamCallbackTimeInfo* timeInfo,
+                      PaStreamCallbackFlags statusFlags,
+                      void *userData) {
+    
+    AudioState *audio = (AudioState *)userData;
+    EchoProtocol *echo = audio->echo;
+    float *out = (float*)outputBuffer;
+    float *in = (float*)inputBuffer;
+
+    for (unsigned int i = 0; i < framesPerBuffer; i++) {
+        if (in) {
+            audio_to_rb(echo, &in[i]);
+        }
+
+        if (echo->tx.tx_sample_count >= SAMPLES_PER_BIT) {
+            if (get_bits(echo->tx_rb, &current_tx_bit)) {
+                echo->tx.tx_sample_count = 0;
+            } else {
+                current_tx_bit = 1;
+                echo->tx.tx_sample_count = 0; 
+            }
+        }
+
+        out[i] = generate_afsk(&echo->mod_state, &current_tx_bit);
+        echo->tx.tx_sample_count++;
+    }
+
+    return paContinue;
+}
+
+int audio_init(AudioState *audio, EchoProtocol *echo, int input_id, int output_id) {
+    PaError err;
+
+    err = Pa_Initialize();
+    if (err != paNoError) {
+        fprintf(stderr, "Erro ao inicializar PortAudio: %s\n", Pa_GetErrorText(err));
+        return -1;
+    }
+
+    audio->echo = echo;
+
+    PaStreamParameters inputParams, outputParams;
+
+    inputParams.device = (input_id >= 0) ? input_id : Pa_GetDefaultInputDevice();
+    if (inputParams.device == paNoDevice) {
+        fprintf(stderr, "Erro: Nenhum dispositivo de entrada encontrado.\n");
+        return -1;
+    }
+    inputParams.channelCount = 1;
+    inputParams.sampleFormat = paFloat32;
+    inputParams.suggestedLatency = Pa_GetDeviceInfo(inputParams.device)->defaultLowInputLatency;
+    inputParams.hostApiSpecificStreamInfo = NULL;
+
+    outputParams.device = (output_id >= 0) ? output_id : Pa_GetDefaultOutputDevice();
+    if (outputParams.device == paNoDevice) {
+        fprintf(stderr, "Erro: Nenhum dispositivo de saída encontrado.\n");
+        return -1;
+    }
+    outputParams.channelCount = 1;
+    outputParams.sampleFormat = paFloat32;
+    outputParams.suggestedLatency = Pa_GetDeviceInfo(outputParams.device)->defaultLowOutputLatency;
+    outputParams.hostApiSpecificStreamInfo = NULL;
+
+    printf("[Audio] Abrindo Entrada [%d] e Saída [%d]\n", inputParams.device, outputParams.device);
+
+    err = Pa_OpenStream(&audio->stream,
+                        &inputParams,
+                        &outputParams,
+                        SAMPLE_RATE,
+                        256,
+                        paNoFlag,
+                        paCallback,
+                        audio);
+
+    if (err != paNoError) {
+        fprintf(stderr, "Erro ao abrir stream: %s\n", Pa_GetErrorText(err));
+        return -1;
+    }
+
+    return 0;
+}
+
+int audio_start(AudioState *audio) {
+    PaError err = Pa_StartStream(audio->stream);
+    if (err != paNoError) {
+        fprintf(stderr, "Erro ao iniciar stream: %s\n", Pa_GetErrorText(err));
+        return -1;
+    }
+    return 0;
+}
+
+void audio_close(AudioState *audio) {
+    if (audio->stream) {
+        Pa_StopStream(audio->stream);
+        Pa_CloseStream(audio->stream);
+    }
+    Pa_Terminate();
+}
+
+void audio_list_devices() {
+    Pa_Initialize();
+    int numDevices = Pa_GetDeviceCount();
+    if (numDevices < 0) {
+        printf("Erro ao obter dispositivos: %s\n", Pa_GetErrorText(numDevices));
+        return;
+    }
+
+    printf("Dispositivos de Áudio Disponíveis:\n");
+    for (int i = 0; i < numDevices; i++) {
+        const PaDeviceInfo *deviceInfo = Pa_GetDeviceInfo(i);
+        printf("[%d] %s (Entradas: %d, Saídas: %d)\n", i, deviceInfo->name,
+               deviceInfo->maxInputChannels, deviceInfo->maxOutputChannels);
+    }
+    Pa_Terminate();
+}
