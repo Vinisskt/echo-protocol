@@ -47,3 +47,88 @@ int tun_read(int fd, uint8_t *buf, uint16_t len) {
 int tun_write(int fd, uint8_t *buf, uint16_t len) {
     return write(fd, buf, len);
 }
+
+#include <arpa/inet.h>
+
+int tun_set_ip(const char *dev, const char *ip) {
+    struct ifreq ifr;
+    struct sockaddr_in *addr;
+    int fd;
+
+    if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("Erro ao abrir socket de controle");
+        return -1;
+    }
+
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, dev, IFNAMSIZ);
+
+    ifr.ifr_addr.sa_family = AF_INET;
+    addr = (struct sockaddr_in *)&ifr.ifr_addr;
+    inet_pton(AF_INET, ip, &addr->sin_addr);
+
+    if (ioctl(fd, SIOCSIFADDR, &ifr) < 0) {
+        perror("Erro SIOCSIFADDR");
+        close(fd);
+        return -1;
+    }
+
+    // Máscara de rede 255.255.255.0
+    inet_pton(AF_INET, "255.255.255.0", &addr->sin_addr);
+    if (ioctl(fd, SIOCSIFNETMASK, &ifr) < 0) {
+        perror("Erro SIOCSIFNETMASK");
+        close(fd);
+        return -1;
+    }
+
+    close(fd);
+    return 0;
+}
+
+int tun_set_mtu(const char *dev, int mtu) {
+    struct ifreq ifr;
+    int fd;
+
+    if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) return -1;
+
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, dev, IFNAMSIZ);
+    ifr.ifr_mtu = mtu;
+
+    if (ioctl(fd, SIOCSIFMTU, &ifr) < 0) {
+        perror("Erro SIOCSIFMTU");
+        close(fd);
+        return -1;
+    }
+
+    close(fd);
+    return 0;
+}
+
+int tun_set_up(const char *dev) {
+    struct ifreq ifr;
+    int fd;
+
+    if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) return -1;
+
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, dev, IFNAMSIZ);
+
+    if (ioctl(fd, SIOCGIFFLAGS, &ifr) < 0) {
+        perror("Erro SIOCGIFFLAGS");
+        close(fd);
+        return -1;
+    }
+
+    ifr.ifr_flags |= (IFF_UP | IFF_RUNNING);
+
+    if (ioctl(fd, SIOCSIFFLAGS, &ifr) < 0) {
+        perror("Erro SIOCSIFFLAGS");
+        close(fd);
+        return -1;
+    }
+
+    close(fd);
+    return 0;
+}
+
