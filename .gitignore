@@ -3,11 +3,18 @@
 *.out
 *.bin
 *.exe
+echo-protocol
 build/
 bin/
 
-# Test binaries (if not covered by patterns above)
+# Logs e arquivos de monitoramento
+*.log
+monitor_pid.txt
+
+# Test binaries
 tests/*.bin
 tests/*.out
+
 # Gemini configuration
 GEMINI.md
+.geminiignore
