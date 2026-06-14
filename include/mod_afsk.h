@@ -1,18 +1,18 @@
 #ifndef MOD_AFSK_H
 #define MOD_AFSK_H
 
-#include "../include/rb_bits.h"
+#include "rb_bits.h"
 #include <stdint.h>
 
-#define FREQ_SPACE 1200
-#define FREQ_MARK 2400
+#define FREQ_SPACE 2400
+#define FREQ_MARK 4800
 #define SAMPLE_RATE 48000
 #define SYNC_WORD 0x930B51DE
-#define BIT_RATE 1200
+#define BIT_RATE 1800
 #define SAMPLES_PER_BIT (SAMPLE_RATE / BIT_RATE)
 #define PREAMBLE 0xAAAA
 
-typedef struct {
+typedef struct StateAFSK_s {
 	float step_cos_space;
 	float step_cos_mark;
 	float step_sin_space;
@@ -28,4 +28,3 @@ void push_preamble(Buffer *buf);
 void push_sync_word(Buffer *buf);
 
 #endif // MOD_AFSK_H
-
