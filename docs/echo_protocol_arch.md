@@ -1,42 +1,34 @@
 # Arquitetura do Echo Protocol (Orquestrador)
 
-O Orquestrador é a camada de abstração que une o processamento de sinal (AFSK/Goertzel) à interface de rede (TUN/TAP). Ele opera seguindo a filosofia de **Bitstream Contínuo** e **Estágios Desacoplados**.
+O Echo Protocol é um sistema de rede acústico de alta performance que transforma a placa de som em uma interface de rede IP transparente. Ele utiliza modulação AFSK, compressão LZ4 em tempo real e sincronização atômica para permitir comunicações interativas como SSH e Neovim através de ondas sonoras.
 
 ## Estrutura de Dados `EchoProtocol`
-Centraliza o estado de todos os módulos:
-- `tun_fd`: Link com o kernel.
-- `tx_rb` / `rx_rb`: Filas de bits para transmissão e recepção.
-- `mod_state` / `space_state` / `mark_state`: Estados internos do DSP.
-- `rx_sample_count`: Contador de amostragem gerenciado externamente.
-- `current_bit`: Bit atual de modulação.
-- `sync_accumulator`: Acumulador para sincronismo.
+Centraliza o estado de todos os módulos e garante a segurança entre threads (Áudio vs. Main Loop):
+- `tun_fd`: Descritor do túnel Linux.
+- `tx_rb` / `rx_rb`: Ring Buffers de bits (8KB cada) para desacoplamento de I/O.
+- `mod_state`: Estado do modulador AFSK (frequências de 2400/4800Hz).
+- `rx`: Estado do receptor, incluindo flag atômica `packet_ready` e temporizador de timeout (6s).
+- `tx`: Estado de transmissão para controle de amostras por bit.
 
-## Pipeline de Processamento (Pipeline Stages)
+## Pipeline de Processamento (High-Performance)
 
-O protocolo é dividido em estágios independentes para evitar acoplamento e lógica aninhada:
-
-### 1. `tun_to_rb` (Networking -> Data Link)
-- **Status:** Validado.
-- **Lógica:** Converte bytes de pacotes IP do TUN em fluxo contínuo de bits para o `tx_rb`.
+### 1. `tun_to_rb` (Networking -> Compression -> Link)
+- **Lógica:** Lê pacotes IP do TUN (MTU 1000). Tenta compressão via **LZ4**. 
+- **Encapsulamento:** Adiciona um cabeçalho de 16 bits (1 bit flag de compressão + 15 bits de tamanho do payload) antes de converter em bits para o `tx_rb`.
 
 ### 2. `rb_to_audio` (Data Link -> Physical Layer)
-- **Status:** 100% Funcional e Validado.
-- **Assinatura:** `void rb_to_audio(EchoProtocol *echo, uint8_t *bit);`
-- **Lógica:** Gera amostras individuais de áudio AFSK, mantendo o estado de fase.
+- **Status:** Tempo real (Callback).
+- **Lógica:** Consome bits do `tx_rb` a 1800 bps. Se o buffer estiver vazio, transmite um tom de "Idle" (Mark - 4800Hz) para manter a sincronia da fase.
 
 ### 3. `audio_to_rb` (Physical Layer -> Data Link)
-- **Status:** 100% Funcional e Validado.
-- **Assinatura:** `void audio_to_rb(EchoProtocol *echo, float *sample);`
-- **Lógica:** Processa amostras via Goertzel, com detecção de bits gerenciada externamente via `rx_sample_count`.
+- **Lógica:** Processa amostras do microfone via Goertzel. Ao detectar a `SYNC_WORD`, inicia a captura do cabeçalho de 16 bits seguido pelo payload.
+- **Resiliência:** Implementa **RX Timeout** de 6 segundos. Se um pacote for corrompido, o receptor reseta automaticamente para o estado de busca.
 
-### 4. `rb_to_tun` (Data Link -> Networking)
-- **Status:** 100% Funcional e Validado.
-- **Lógica:** Reconstrói pacotes IP a partir do fluxo de bits no `rx_rb`.
-- **Assinatura:** `void rb_to_tun(EchoProtocol *echo, int *packet_len);`
-- **Diferencial:** Implementa reconstrução linear de bits (`Shift-in`) diretamente no buffer de destino. O tamanho do pacote (`packet_len`) é gerenciado por referência.
-- **Validação:** Aprovada em testes de estresse com 1000 pacotes de tamanhos variáveis sem corrupção de dados.
+### 4. `rb_to_tun` (Link -> Decompression -> Networking)
+- **Lógica:** Reconstrói o pacote do `rx_rb`. Se o flag de compressão estiver ativo, realiza a descompressão LZ4 antes de injetar o pacote IP no kernel.
 
-## Filosofia de Design
-- **Zero Acoplamento:** As funções de áudio não conhecem protocolos de rede, e as funções de rede não conhecem frequências.
-- **Eficiência de Bitwise:** Uso intensivo de Bit Shift (`>>`, `<<`) para garantir performance em tempo real.
-- **Resiliência:** Preparado para lidar com tráfego IPv4 e IPv6 de forma transparente.
+## Filosofia de Design "Turbo"
+- **Latência Mínima:** Loop principal baseado em `poll` com timeout de 5ms.
+- **Eficiência de Payload:** MTU de 1000 bytes para minimizar o overhead de preâmbulos em grandes transferências (como desenhos de tela do Neovim).
+- **Sincronia de Fase:** Modulação CPFSK (Continuous Phase) que garante zero ruído de transição, permitindo bitrates mais altos (até 2400bps).
+- **Isolamento de Erro:** Uso de UDP via `socat` para shells interativos, garantindo que a sessão não caia por erros de bit isolados.
