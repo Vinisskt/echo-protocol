@@ -1,7 +1,10 @@
-#include "../include/rb_bits.h"
+#ifndef DEMOD_AFSK_H
+#define DEMOD_AFSK_H
+
+#include "rb_bits.h"
 #include <stdint.h>
 
-typedef struct {
+typedef struct StateGoertzel_s {
 	int n;
 	float k, omega, coeff, q1, q2; 
 } StateGoertzel;
@@ -11,3 +14,4 @@ void pre_calc_goertzel(StateGoertzel *state, uint16_t *freq);
 float process_goertzel(StateGoertzel *state, float *sample);
 void reset_state(StateGoertzel *state);
 
+#endif
