@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <math.h>
 
-#define SIZE_PREAMBLE (16 - 1)
+#define SIZE_PREAMBLE (24 - 1)
 #define SIZE_SYNC_WORD (32 - 1)
 
 void push_preamble(Buffer *buf) {
@@ -49,6 +49,6 @@ float generate_afsk(StateAFSK *state, uint8_t *bit) {
 	state->current_cos = next_cos;
 	state->current_sin = next_sin;
 	
-	return state->current_sin;
+	return state->current_sin * 0.5f;
 }
 
