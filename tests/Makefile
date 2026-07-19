@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -I../include
-LDFLAGS = -lm
+LDFLAGS = -lm -llz4
 SRC = ../src/rb_bits.c ../src/mod_afsk.c ../src/demod_afsk.c ../src/echo_protocol.c ../src/tun_tap.c
 TEST_SRCS = $(wildcard test_*.c)
 TEST_BINS = $(TEST_SRCS:.c=.bin)
