@@ -1,4 +1,0 @@
-echo-protocol
-*.o
-tests/*.bin
-.git
