@@ -276,7 +276,7 @@ void test_rb_to_tun_no_compression() {
     echo.tun_fd = pipefd[1];
     echo.rx_rb = rb_init();
     uint8_t original[] = {0x45, 0x00, 0x00, 0x1C, 0x12, 0x34, 0x40, 0x00,
-                           0x40, 0x01, 0xAF, 0xB7, 0x0A, 0x00, 0x00, 0x01,
+                           0x40, 0x01, 0x14, 0xAB, 0x0A, 0x00, 0x00, 0x01,
                            0x0A, 0x00, 0x00, 0x02, 0x08, 0x00, 0xF7, 0xFF,
                            0x00, 0x01, 0x00, 0x01};
     int pkt_len = sizeof(original);
@@ -553,6 +553,10 @@ void test_rb_to_tun_multiple_packets() {
     packet[2] = 0x00; packet[3] = 0x1C;
     for (int iter = 0; iter < 5; iter++) {
         packet[5] = (uint8_t)iter;
+        packet[10] = 0; packet[11] = 0;
+        uint16_t cksum = ip_checksum(packet, 20);
+        packet[10] = (cksum >> 8) & 0xFF;
+        packet[11] = cksum & 0xFF;
         int pkt_len = sizeof(packet);
         uint16_t header = (0 << 15) | (pkt_len & 0x7FFF);
         for (int i = 15; i >= 0; i--) {

@@ -74,7 +74,7 @@ void tun_to_rb(EchoProtocol *echo) {
         }
     }
 
-    printf("[TX] TUN: %d bytes -> Air: %d bytes (ROHC: %d, LZ4: %d)\n", nread, final_len, rohc_flag, comp_flag);
+    printf("[TX] tun=%d | air=%d | rohc=%d | lz4=%d\n", nread, final_len, rohc_flag, comp_flag);
 
     uint16_t header = (comp_flag << 15) | (rohc_flag << 14) | (final_len & 0x3FFF);
     for (int i = 15; i >= 0; i--) {
@@ -123,7 +123,7 @@ static void process_rx_bit(EchoProtocol *echo, uint8_t bit) {
         if (now - echo->rx.last_rx_time > 6) {
             echo->rx.state = SEARCHING;
             echo->rx.bits_received = 0;
-            printf("[RX] Timeout de recepção! Resetando...\n");
+            printf("[RX] TIMEOUT | state=reset\n");
             return;
         }
     }
@@ -135,7 +135,7 @@ static void process_rx_bit(EchoProtocol *echo, uint8_t bit) {
             echo->rx.packet_len = 0;
             echo->rx.header_accumulator = 0;
             echo->rx.last_rx_time = now;
-            printf("[RX] Sync Word OK!\n");
+            printf("[RX] sync=ok\n");
         }
         return;
     }
@@ -173,6 +173,7 @@ void audio_to_rb(EchoProtocol *echo, float *sample) {
 }
 
 void rb_to_tun(EchoProtocol *echo, int *packet_len) {
+    static int rx_corrupted = 0;
     uint8_t audio_payload[SIZE_BUF];
     uint8_t final_ip_packet[SIZE_BUF * 2];
     memset(audio_payload, 0, sizeof(audio_payload));
@@ -182,6 +183,12 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
         if (get_bits(echo->rx_rb, &bit) == 0) return;
     }
 
+    if (*packet_len <= 0 || *packet_len > SIZE_BUF) {
+        rx_corrupted++;
+        printf("[RX] CORRUPT | reason=bad_len | air=%d | total=%d\n", *packet_len, rx_corrupted);
+        return;
+    }
+
     int total_bits = (*packet_len) * SIZE_BYTE;
     for (int i = 0; i < total_bits; i++) {
         if (get_bits(echo->rx_rb, &bit) == 0) return;
@@ -189,19 +196,39 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
     }
 
     int out_size;
+    int corrupted = 0;
+    const char *reason = "";
+
     if (echo->rx.is_rohc) {
         out_size = rohc_decompress(&echo->rohc_rx, audio_payload, *packet_len, final_ip_packet, sizeof(final_ip_packet));
+        if (out_size <= 0) { corrupted = 1; reason = "rohc_fail"; }
     } else if (echo->rx.is_compressed) {
         out_size = LZ4_decompress_safe((const char*)audio_payload, (char*)final_ip_packet, *packet_len, sizeof(final_ip_packet));
+        if (out_size < 0) { corrupted = 1; reason = "lz4_fail"; out_size = 0; }
     } else {
         memcpy(final_ip_packet, audio_payload, *packet_len);
         out_size = *packet_len;
         rohc_sync_context(&echo->rohc_rx, audio_payload, *packet_len);
     }
 
+    if (!corrupted && out_size >= 20 && (final_ip_packet[0] & 0xF0) == 0x40) {
+        int ihl = (final_ip_packet[0] & 0x0F) * 4;
+        uint16_t cksum = ip_checksum(final_ip_packet, ihl);
+        if (cksum != 0) {
+            corrupted = 1;
+            reason = "ip_cksum";
+        }
+    }
+
+    if (corrupted) {
+        rx_corrupted++;
+        printf("[RX] CORRUPT | reason=%s | air=%d | total=%d\n", reason, *packet_len, rx_corrupted);
+        return;
+    }
+
     if (out_size > 0) {
         tun_write(echo->tun_fd, final_ip_packet, out_size);
-        printf("[RX] Delivered: %d bytes (was %d on air, ROHC: %d, LZ4: %d)\n", out_size, *packet_len, echo->rx.is_rohc, echo->rx.is_compressed);
+        printf("[RX] OK | tun=%d | air=%d | rohc=%d | lz4=%d\n", out_size, *packet_len, echo->rx.is_rohc, echo->rx.is_compressed);
     }
 }
 
