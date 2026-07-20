@@ -188,8 +188,9 @@ void test_tun_to_rb_via_pipe_no_compression() {
         header = (header << 1) | header_bits[i];
     }
     uint8_t comp_flag = (header >> 15) & 1;
-    uint16_t packet_len = header & 0x7FFF;
-    if (comp_flag != 0 || packet_len != 16) {
+    uint8_t rohc_flag = (header >> 14) & 1;
+    uint16_t packet_len = header & 0x3FFF;
+    if (comp_flag != 0 || rohc_flag != 0 || packet_len != 16) {
         FAIL("wrong header (compression applied to random data)");
         close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
         return;
@@ -376,6 +377,131 @@ void test_rx_state_machine_searching_to_data() {
     free(echo.rx_rb);
 }
 
+void test_rohc_integration_tun_to_rb_compresses_ip() {
+    TEST("tun_to_rb compresses matching IP packets via ROHC (reduces to under 20 bytes)");
+    int pipefd[2];
+    if (pipe(pipefd) == -1) { FAIL("pipe failed"); return; }
+    EchoProtocol echo;
+    memset(&echo, 0, sizeof(echo));
+    echo.tun_fd = pipefd[0];
+    echo.tx_rb = rb_init();
+    pre_calc_afsk(&echo.mod_state);
+    rohc_init(&echo.rohc_tx);
+    uint8_t pkt[28] = {0x45,0x00,0x00,0x1C,0x00,0x01,0x40,0x00,
+                       0x40,0x06,0x00,0x00,0x0A,0x00,0x00,0x01,
+                       0x0A,0x00,0x00,0x02, 0x08,0x00,0xF7,0xFF,
+                       0x00,0x01,0x00,0x01};
+    write(pipefd[1], pkt, sizeof(pkt));
+    tun_to_rb(&echo);
+    write(pipefd[1], pkt, sizeof(pkt));
+    tun_to_rb(&echo);
+    uint8_t bit, hdr[16];
+    for (int i = 0; i < 16; i++) {
+        if (!get_bits(echo.tx_rb, &bit)) { FAIL("first header missing"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+        hdr[i] = bit;
+    }
+    uint16_t header1 = 0;
+    for (int i = 0; i < 16; i++) header1 = (header1 << 1) | hdr[i];
+    uint16_t pkt1_len = header1 & 0x3FFF;
+    for (int i = 0; i < pkt1_len * 8; i++) {
+        if (!get_bits(echo.tx_rb, &bit)) break;
+    }
+    uint16_t header2 = 0;
+    for (int i = 0; i < 16; i++) {
+        if (!get_bits(echo.tx_rb, &bit)) { FAIL("second header missing"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+        header2 = (header2 << 1) | bit;
+    }
+    uint8_t pkt2_rohc = (header2 >> 14) & 1;
+    uint16_t pkt2_len = header2 & 0x3FFF;
+    if (pkt2_rohc != 1) { FAIL("second packet should use ROHC"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    if (pkt2_len >= 28) { FAIL("ROHC should reduce size below raw"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    PASS();
+    close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
+}
+
+void test_rohc_integration_rb_to_tun_decompresses() {
+    TEST("rb_to_tun decompresses ROHC-compressed packet correctly");
+    int pipefd[2];
+    if (pipe(pipefd) == -1) { FAIL("pipe failed"); return; }
+    fcntl(pipefd[0], F_SETFL, O_NONBLOCK);
+    EchoProtocol echo;
+    memset(&echo, 0, sizeof(echo));
+    echo.tun_fd = pipefd[1];
+    echo.rx_rb = rb_init();
+    rohc_init(&echo.rohc_rx);
+    uint8_t original[28] = {0x45,0x00,0x00,0x1C,0x00,0x01,0x40,0x00,
+                            0x40,0x06,0x00,0x00,0x0A,0x00,0x00,0x01,
+                            0x0A,0x00,0x00,0x02, 0x08,0x00,0xF7,0xFF,
+                            0x00,0x01,0x00,0x01};
+    original[10] = 0; original[11] = 0;
+    uint16_t ck = ip_checksum(original, 20);
+    original[10] = (ck >> 8) & 0xFF;
+    original[11] = ck & 0xFF;
+    memcpy(echo.rohc_rx.context, original, 20);
+    echo.rohc_rx.context_valid = 1;
+    uint8_t compressed[16];
+    ROHCState dummy_tx;
+    rohc_init(&dummy_tx);
+    rohc_compress(&dummy_tx, original, sizeof(original), NULL, 0);
+    int comp_size = rohc_compress(&dummy_tx, original, sizeof(original), compressed, sizeof(compressed));
+    if (comp_size <= 0) { FAIL("ROHC compress failed"); close(pipefd[0]); close(pipefd[1]); free(echo.rx_rb); return; }
+    uint16_t header = (0 << 15) | (1 << 14) | (comp_size & 0x3FFF);
+    for (int i = 15; i >= 0; i--) {
+        uint8_t bit = (header >> i) & 1;
+        put_bits(echo.rx_rb, &bit);
+    }
+    for (int i = 0; i < comp_size; i++) {
+        for (int b = 7; b >= 0; b--) {
+            uint8_t bit = (compressed[i] >> b) & 1;
+            put_bits(echo.rx_rb, &bit);
+        }
+    }
+    echo.rx.is_rohc = 1;
+    echo.rx.is_compressed = 0;
+    rb_to_tun(&echo, &comp_size);
+    uint8_t result[256];
+    int n = read(pipefd[0], result, sizeof(result));
+    if (n != (int)sizeof(original)) { FAIL("decompressed size wrong"); close(pipefd[0]); close(pipefd[1]); free(echo.rx_rb); return; }
+    if (memcmp(result, original, sizeof(original)) != 0) { FAIL("decompressed content corrupted"); close(pipefd[0]); close(pipefd[1]); free(echo.rx_rb); return; }
+    PASS();
+    close(pipefd[0]); close(pipefd[1]); free(echo.rx_rb);
+}
+
+void test_rohc_integration_header_uses_14bit_length() {
+    TEST("ROHC header uses 14 bits for length (bit 14 = rohc flag, mask 0x3FFF)");
+    int pipefd[2];
+    if (pipe(pipefd) == -1) { FAIL("pipe failed"); return; }
+    EchoProtocol echo;
+    memset(&echo, 0, sizeof(echo));
+    echo.tun_fd = pipefd[0];
+    echo.tx_rb = rb_init();
+    pre_calc_afsk(&echo.mod_state);
+    rohc_init(&echo.rohc_tx);
+    uint8_t pkt[28] = {0x45,0x00,0x00,0x1C,0x00,0x01,0x40,0x00,
+                       0x40,0x06,0x00,0x00,0x0A,0x00,0x00,0x01,
+                       0x0A,0x00,0x00,0x02, 0x08,0x00,0xF7,0xFF,
+                       0x00,0x01,0x00,0x01};
+    write(pipefd[1], pkt, sizeof(pkt));
+    tun_to_rb(&echo);
+    write(pipefd[1], pkt, sizeof(pkt));
+    tun_to_rb(&echo);
+    uint8_t bit;
+    for (int i = 0; i < 16; i++) { if (!get_bits(echo.tx_rb, &bit)) { FAIL("first header missing"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; } }
+    int first_pkt_bits = 28 * 8;
+    for (int i = 0; i < first_pkt_bits; i++) { if (!get_bits(echo.tx_rb, &bit)) break; }
+    uint16_t header2 = 0;
+    for (int i = 0; i < 16; i++) {
+        if (!get_bits(echo.tx_rb, &bit)) { FAIL("second header missing"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+        header2 = (header2 << 1) | bit;
+    }
+    uint8_t rohc_flag = (header2 >> 14) & 1;
+    uint16_t pkt2_len = header2 & 0x3FFF;
+    if (rohc_flag != 1) { FAIL("rohc flag not set in second packet"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    if (pkt2_len == 0 || pkt2_len >= 28) { FAIL("ROHC length out of expected range"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    PASS();
+    close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
+}
+
 void test_echo_close_does_not_crash() {
     TEST("echo_close runs without crash (invalid fd, null or allocated buffers)");
     EchoProtocol echo;
@@ -470,6 +596,11 @@ int main() {
     test_rb_to_tun_with_lz4_decompression();
     test_rb_to_tun_empty_packet_ignored();
     test_rb_to_tun_multiple_packets();
+
+    printf("\n[ROHC integration]\n");
+    test_rohc_integration_tun_to_rb_compresses_ip();
+    test_rohc_integration_rb_to_tun_decompresses();
+    test_rohc_integration_header_uses_14bit_length();
 
     printf("\n=== Summary: %d PASS, %d FAIL ===\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
