@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-static uint8_t current_tx_bit = 1;
+static uint8_t current_tx_symbol = 0;
 
 static int paCallback(const void *inputBuffer, void *outputBuffer,
                       unsigned long framesPerBuffer,
@@ -22,16 +22,17 @@ static int paCallback(const void *inputBuffer, void *outputBuffer,
             audio_to_rb(echo, &in[i]);
         }
 
-        if (echo->tx.tx_sample_count >= SAMPLES_PER_BIT) {
-            if (get_bits(echo->tx_rb, &current_tx_bit)) {
-                echo->tx.tx_sample_count = 0;
+        if (echo->tx.tx_sample_count >= SAMPLES_PER_SYMBOL) {
+            uint8_t bits[2];
+            if (get_bits(echo->tx_rb, &bits[0]) && get_bits(echo->tx_rb, &bits[1])) {
+                current_tx_symbol = (bits[0] << 1) | bits[1];
             } else {
-                current_tx_bit = 1;
-                echo->tx.tx_sample_count = 0; 
+                current_tx_symbol = 3;
             }
+            echo->tx.tx_sample_count = 0;
         }
 
-        out[i] = generate_afsk(&echo->mod_state, &current_tx_bit);
+        out[i] = generate_fsk(&echo->mod_state, &current_tx_symbol);
         echo->tx.tx_sample_count++;
     }
 

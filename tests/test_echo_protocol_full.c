@@ -35,10 +35,11 @@ void test_echo_init_manual_state_config() {
     echo.rx_rb = rb_init();
     assert(echo.tx_rb != NULL);
     assert(echo.rx_rb != NULL);
-    pre_calc_afsk(&echo.mod_state);
-    uint16_t fs = FREQ_SPACE, fm = FREQ_MARK;
-    pre_calc_goertzel(&echo.space_state, &fs);
-    pre_calc_goertzel(&echo.mark_state, &fm);
+    pre_calc_fsk(&echo.mod_state);
+    uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+    }
     echo.rx.state = SEARCHING;
     echo.rx.sync_accumulator = 0;
     echo.rx.rx_sample_count = 0;
@@ -47,9 +48,9 @@ void test_echo_init_manual_state_config() {
     echo.rx.header_accumulator = 0;
     echo.rx.last_rx_time = 0;
     echo.rx.is_compressed = 0;
-    echo.tx.tx_sample_count = SAMPLES_PER_BIT;
+    echo.tx.tx_sample_count = SAMPLES_PER_SYMBOL;
     if (echo.rx.state != SEARCHING) { FAIL("state != SEARCHING"); return; }
-    if (echo.tx.tx_sample_count != SAMPLES_PER_BIT) { FAIL("tx_sample_count wrong"); return; }
+    if (echo.tx.tx_sample_count != SAMPLES_PER_SYMBOL) { FAIL("tx_sample_count wrong"); return; }
     PASS();
     free(echo.tx_rb);
     free(echo.rx_rb);
@@ -59,11 +60,11 @@ void test_rb_to_audio_updates_state() {
     TEST("rb_to_audio updates current_sin and current_cos");
     EchoProtocol echo;
     memset(&echo, 0, sizeof(echo));
-    pre_calc_afsk(&echo.mod_state);
-    uint8_t bit = 1;
+    pre_calc_fsk(&echo.mod_state);
+    uint8_t symbol = 1;
     float sin_before = echo.mod_state.current_sin;
     float cos_before = echo.mod_state.current_cos;
-    rb_to_audio(&echo, &bit);
+    rb_to_audio(&echo, &symbol);
     if (echo.mod_state.current_sin == sin_before && echo.mod_state.current_cos == cos_before) {
         FAIL("state did not evolve");
         return;
@@ -75,10 +76,10 @@ void test_rb_to_audio_constant_magnitude() {
     TEST("rb_to_audio maintains magnitude near 1 (sin^2 + cos^2)");
     EchoProtocol echo;
     memset(&echo, 0, sizeof(echo));
-    pre_calc_afsk(&echo.mod_state);
-    uint8_t bit = 1;
-    for (int i = 0; i < SAMPLES_PER_BIT; i++) {
-        rb_to_audio(&echo, &bit);
+    pre_calc_fsk(&echo.mod_state);
+    uint8_t symbol = 1;
+    for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
+        rb_to_audio(&echo, &symbol);
         float mag = echo.mod_state.current_sin * echo.mod_state.current_sin +
                     echo.mod_state.current_cos * echo.mod_state.current_cos;
         if (mag < 0.98f || mag > 1.02f) {
@@ -90,7 +91,7 @@ void test_rb_to_audio_constant_magnitude() {
 }
 
 void test_audio_to_rb_sample_count() {
-    TEST("audio_to_rb produces 1 bit every SAMPLES_PER_BIT calls");
+    TEST("audio_to_rb produces 2 bits every SAMPLES_PER_SYMBOL calls");
     EchoProtocol echo;
     memset(&echo, 0, sizeof(echo));
     echo.rx_rb = rb_init();
@@ -99,23 +100,24 @@ void test_audio_to_rb_sample_count() {
     echo.rx.bits_received = 0;
     echo.rx.packet_len = 100;
     echo.rx.last_rx_time = (uint32_t)time(NULL);
-    uint16_t fs = FREQ_SPACE, fm = FREQ_MARK;
-    pre_calc_goertzel(&echo.space_state, &fs);
-    pre_calc_goertzel(&echo.mark_state, &fm);
+    uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+    }
     float sample = 0.5f;
-    for (int i = 0; i < SAMPLES_PER_BIT - 1; i++) {
+    for (int i = 0; i < SAMPLES_PER_SYMBOL - 1; i++) {
         audio_to_rb(&echo, &sample);
-        if (echo.rx.bits_received != 0) { FAIL("bit produced before time"); return; }
+        if (echo.rx.bits_received != 0) { FAIL("bits produced before time"); return; }
     }
     audio_to_rb(&echo, &sample);
-    if (echo.rx.bits_received != 1) { FAIL("bit not produced after SAMPLES_PER_BIT"); return; }
+    if (echo.rx.bits_received != 2) { FAIL("2 bits not produced after SAMPLES_PER_SYMBOL"); return; }
     if (echo.rx.rx_sample_count != 0) { FAIL("sample_count not reset"); return; }
     PASS();
     free(echo.rx_rb);
 }
 
 void test_audio_to_rb_demodulates_mark_as_1() {
-    TEST("audio_to_rb demodulates MARK (4800Hz) as bit 1");
+    TEST("audio_to_rb demodulates FREQ_11 (5000Hz) as bits 1,1");
     EchoProtocol echo;
     memset(&echo, 0, sizeof(echo));
     echo.rx_rb = rb_init();
@@ -124,23 +126,25 @@ void test_audio_to_rb_demodulates_mark_as_1() {
     echo.rx.bits_received = 0;
     echo.rx.packet_len = 100;
     echo.rx.last_rx_time = (uint32_t)time(NULL);
-    uint16_t fs = FREQ_SPACE, fm = FREQ_MARK;
-    pre_calc_goertzel(&echo.space_state, &fs);
-    pre_calc_goertzel(&echo.mark_state, &fm);
-    float step = 2.0f * (float)M_PI * FREQ_MARK / SAMPLE_RATE;
-    for (int i = 0; i < SAMPLES_PER_BIT; i++) {
+    uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+    }
+    float step = 2.0f * (float)M_PI * FREQ_11 / SAMPLE_RATE;
+    for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
         float sample = sinf(i * step);
         audio_to_rb(&echo, &sample);
     }
-    uint8_t bit;
-    if (!get_bits(echo.rx_rb, &bit)) { FAIL("no bit produced"); free(echo.rx_rb); return; }
-    if (bit != 1) { FAIL("MARK demodulated as 0"); free(echo.rx_rb); return; }
+    uint8_t bits[2];
+    if (!get_bits(echo.rx_rb, &bits[0])) { FAIL("no first bit produced"); free(echo.rx_rb); return; }
+    if (!get_bits(echo.rx_rb, &bits[1])) { FAIL("no second bit produced"); free(echo.rx_rb); return; }
+    if (bits[0] != 1 || bits[1] != 1) { FAIL("FREQ_11 demodulated as wrong bits"); free(echo.rx_rb); return; }
     PASS();
     free(echo.rx_rb);
 }
 
 void test_audio_to_rb_demodulates_space_as_0() {
-    TEST("audio_to_rb demodulates SPACE (2400Hz) as bit 0");
+    TEST("audio_to_rb demodulates FREQ_00 (2000Hz) as bits 0,0");
     EchoProtocol echo;
     memset(&echo, 0, sizeof(echo));
     echo.rx_rb = rb_init();
@@ -149,17 +153,19 @@ void test_audio_to_rb_demodulates_space_as_0() {
     echo.rx.bits_received = 0;
     echo.rx.packet_len = 100;
     echo.rx.last_rx_time = (uint32_t)time(NULL);
-    uint16_t fs = FREQ_SPACE, fm = FREQ_MARK;
-    pre_calc_goertzel(&echo.space_state, &fs);
-    pre_calc_goertzel(&echo.mark_state, &fm);
-    float step = 2.0f * (float)M_PI * FREQ_SPACE / SAMPLE_RATE;
-    for (int i = 0; i < SAMPLES_PER_BIT; i++) {
+    uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+    }
+    float step = 2.0f * (float)M_PI * FREQ_00 / SAMPLE_RATE;
+    for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
         float sample = sinf(i * step);
         audio_to_rb(&echo, &sample);
     }
-    uint8_t bit;
-    if (!get_bits(echo.rx_rb, &bit)) { FAIL("no bit produced"); free(echo.rx_rb); return; }
-    if (bit != 0) { FAIL("SPACE demodulated as 1"); free(echo.rx_rb); return; }
+    uint8_t bits[2];
+    if (!get_bits(echo.rx_rb, &bits[0])) { FAIL("no first bit produced"); free(echo.rx_rb); return; }
+    if (!get_bits(echo.rx_rb, &bits[1])) { FAIL("no second bit produced"); free(echo.rx_rb); return; }
+    if (bits[0] != 0 || bits[1] != 0) { FAIL("FREQ_00 demodulated as wrong bits"); free(echo.rx_rb); return; }
     PASS();
     free(echo.rx_rb);
 }
@@ -172,7 +178,7 @@ void test_tun_to_rb_via_pipe_no_compression() {
     memset(&echo, 0, sizeof(echo));
     echo.tun_fd = pipefd[0];
     echo.tx_rb = rb_init();
-    pre_calc_afsk(&echo.mod_state);
+    pre_calc_fsk(&echo.mod_state);
     srand(1234);
     uint8_t packet[16];
     for (int i = 0; i < 16; i++) packet[i] = rand() & 0xFF;
@@ -214,7 +220,7 @@ void test_tun_to_rb_with_lz4_compression() {
     memset(&echo, 0, sizeof(echo));
     echo.tun_fd = pipefd[0];
     echo.tx_rb = rb_init();
-    pre_calc_afsk(&echo.mod_state);
+    pre_calc_fsk(&echo.mod_state);
     uint8_t packet[128];
     memset(packet, 0xAA, sizeof(packet));
     write(pipefd[1], packet, sizeof(packet));
@@ -240,7 +246,7 @@ void test_tun_to_rb_header_16bit_structure() {
     memset(&echo, 0, sizeof(echo));
     echo.tun_fd = pipefd[0];
     echo.tx_rb = rb_init();
-    pre_calc_afsk(&echo.mod_state);
+    pre_calc_fsk(&echo.mod_state);
     uint8_t packet[10];
     memset(packet, 0xFF, sizeof(packet));
     write(pipefd[1], packet, sizeof(packet));
@@ -270,9 +276,9 @@ void test_rb_to_tun_no_compression() {
     echo.tun_fd = pipefd[1];
     echo.rx_rb = rb_init();
     uint8_t original[] = {0x45, 0x00, 0x00, 0x1C, 0x12, 0x34, 0x40, 0x00,
-                          0x40, 0x01, 0xAF, 0xB7, 0x0A, 0x00, 0x00, 0x01,
-                          0x0A, 0x00, 0x00, 0x02, 0x08, 0x00, 0xF7, 0xFF,
-                          0x00, 0x01, 0x00, 0x01};
+                           0x40, 0x01, 0xAF, 0xB7, 0x0A, 0x00, 0x00, 0x01,
+                           0x0A, 0x00, 0x00, 0x02, 0x08, 0x00, 0xF7, 0xFF,
+                           0x00, 0x01, 0x00, 0x01};
     int pkt_len = sizeof(original);
     uint16_t header = (0 << 15) | (pkt_len & 0x7FFF);
     for (int i = 15; i >= 0; i--) {
@@ -361,14 +367,19 @@ void test_rx_state_machine_searching_to_data() {
     echo.rx.packet_len = 0;
     echo.rx.header_accumulator = 0;
     echo.rx.last_rx_time = 0;
-    uint16_t fs = FREQ_SPACE, fm = FREQ_MARK;
-    pre_calc_goertzel(&echo.space_state, &fs);
-    pre_calc_goertzel(&echo.mark_state, &fm);
-    for (int i = 31; i >= 0; i--) {
-        uint16_t freq = (SYNC_WORD >> i) & 1 ? FREQ_MARK : FREQ_SPACE;
+    uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+    }
+    for (int s = 0; s < 16; s++) {
+        int shift = 30 - s * 2;
+        uint8_t b0 = (SYNC_WORD >> (shift + 1)) & 1;
+        uint8_t b1 = (SYNC_WORD >> shift) & 1;
+        int sym = (b0 << 1) | b1;
+        uint16_t freq = freqs[sym];
         float step = 2.0f * (float)M_PI * freq / SAMPLE_RATE;
-        for (int s = 0; s < SAMPLES_PER_BIT; s++) {
-            float sample = sinf(s * step);
+        for (int k = 0; k < SAMPLES_PER_SYMBOL; k++) {
+            float sample = sinf(k * step);
             audio_to_rb(&echo, &sample);
         }
     }
@@ -385,12 +396,12 @@ void test_rohc_integration_tun_to_rb_compresses_ip() {
     memset(&echo, 0, sizeof(echo));
     echo.tun_fd = pipefd[0];
     echo.tx_rb = rb_init();
-    pre_calc_afsk(&echo.mod_state);
+    pre_calc_fsk(&echo.mod_state);
     rohc_init(&echo.rohc_tx);
     uint8_t pkt[28] = {0x45,0x00,0x00,0x1C,0x00,0x01,0x40,0x00,
-                       0x40,0x06,0x00,0x00,0x0A,0x00,0x00,0x01,
-                       0x0A,0x00,0x00,0x02, 0x08,0x00,0xF7,0xFF,
-                       0x00,0x01,0x00,0x01};
+                        0x40,0x06,0x00,0x00,0x0A,0x00,0x00,0x01,
+                        0x0A,0x00,0x00,0x02, 0x08,0x00,0xF7,0xFF,
+                        0x00,0x01,0x00,0x01};
     write(pipefd[1], pkt, sizeof(pkt));
     tun_to_rb(&echo);
     write(pipefd[1], pkt, sizeof(pkt));
@@ -475,12 +486,12 @@ void test_rohc_integration_header_uses_14bit_length() {
     memset(&echo, 0, sizeof(echo));
     echo.tun_fd = pipefd[0];
     echo.tx_rb = rb_init();
-    pre_calc_afsk(&echo.mod_state);
+    pre_calc_fsk(&echo.mod_state);
     rohc_init(&echo.rohc_tx);
     uint8_t pkt[28] = {0x45,0x00,0x00,0x1C,0x00,0x01,0x40,0x00,
-                       0x40,0x06,0x00,0x00,0x0A,0x00,0x00,0x01,
-                       0x0A,0x00,0x00,0x02, 0x08,0x00,0xF7,0xFF,
-                       0x00,0x01,0x00,0x01};
+                        0x40,0x06,0x00,0x00,0x0A,0x00,0x00,0x01,
+                        0x0A,0x00,0x00,0x02, 0x08,0x00,0xF7,0xFF,
+                        0x00,0x01,0x00,0x01};
     write(pipefd[1], pkt, sizeof(pkt));
     tun_to_rb(&echo);
     write(pipefd[1], pkt, sizeof(pkt));

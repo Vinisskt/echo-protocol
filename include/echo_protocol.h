@@ -3,7 +3,7 @@
 
 #include "tun_tap.h"
 #include "rb_bits.h"
-#include "mod_afsk.h"
+#include "mod_fsk.h"
 #include "demod_afsk.h"
 #include "rohc.h"
 #include <stdatomic.h>
@@ -37,9 +37,8 @@ typedef struct EchoProtocol_s {
     int tun_fd;
     Buffer *tx_rb;
     Buffer *rx_rb;
-    StateAFSK mod_state;
-    StateGoertzel space_state;
-    StateGoertzel mark_state;
+    StateFSK mod_state;
+    StateGoertzel freq_states[4];
     RxState rx;
     TxState tx;
     ROHCState rohc_tx;
@@ -50,7 +49,7 @@ int echo_init(EchoProtocol *echo, char *dev_name);
 void echo_close(EchoProtocol *echo);
 void tun_to_rb(EchoProtocol *echo);
 void rb_to_tun(EchoProtocol *echo, int *packet_len);
-void rb_to_audio(EchoProtocol *echo, uint8_t *bit);
+void rb_to_audio(EchoProtocol *echo, uint8_t *symbol);
 void audio_to_rb(EchoProtocol *echo, float *sample);
 
 #endif

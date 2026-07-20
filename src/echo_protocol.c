@@ -18,13 +18,12 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
     echo->tx_rb = rb_init();
     echo->rx_rb = rb_init();
 
-    pre_calc_afsk(&echo->mod_state);
+    pre_calc_fsk(&echo->mod_state);
 
-    uint16_t freq_space = FREQ_SPACE;
-    uint16_t freq_mark = FREQ_MARK;
-    
-    pre_calc_goertzel(&echo->space_state, &freq_space);
-    pre_calc_goertzel(&echo->mark_state, &freq_mark);
+    uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel(&echo->freq_states[i], &freqs[i]);
+    }
 
     echo->rx.state = SEARCHING;
     echo->rx.sync_accumulator = 0;
@@ -40,7 +39,7 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
     rohc_init(&echo->rohc_tx);
     rohc_init(&echo->rohc_rx);
 
-    echo->tx.tx_sample_count = SAMPLES_PER_BIT; 
+    echo->tx.tx_sample_count = SAMPLES_PER_SYMBOL; 
 
     return 0;
 }
@@ -90,8 +89,8 @@ void tun_to_rb(EchoProtocol *echo) {
     }
 }
 
-void rb_to_audio(EchoProtocol *echo, uint8_t *bit) {
-    generate_afsk(&echo->mod_state, bit);
+void rb_to_audio(EchoProtocol *echo, uint8_t *symbol) {
+    generate_fsk(&echo->mod_state, symbol);
 }
 
 static void handle_data_state(EchoProtocol *echo, uint8_t bit) {
@@ -146,20 +145,31 @@ static void process_rx_bit(EchoProtocol *echo, uint8_t bit) {
 }
 
 void audio_to_rb(EchoProtocol *echo, float *sample) {
-    float mag_space = process_goertzel(&echo->space_state, sample);
-    float mag_mark = process_goertzel(&echo->mark_state, sample);
+    float mag[4];
+    for (int i = 0; i < 4; i++) {
+        mag[i] = process_goertzel(&echo->freq_states[i], sample);
+    }
 
-    if (++echo->rx.rx_sample_count < SAMPLES_PER_BIT) {
+    if (++echo->rx.rx_sample_count < SAMPLES_PER_SYMBOL) {
         return;
     }
 
-    uint8_t bit = (mag_mark > mag_space) ? 1 : 0;
+    int max_idx = 0;
+    for (int i = 1; i < 4; i++) {
+        if (mag[i] > mag[max_idx]) max_idx = i;
+    }
 
-    reset_state(&echo->space_state);
-    reset_state(&echo->mark_state);
+    uint8_t bits[2];
+    bits[0] = (max_idx >> 1) & 1;
+    bits[1] = max_idx & 1;
+
+    for (int i = 0; i < 4; i++) {
+        reset_state(&echo->freq_states[i]);
+    }
     echo->rx.rx_sample_count = 0;
 
-    process_rx_bit(echo, bit);
+    process_rx_bit(echo, bits[0]);
+    process_rx_bit(echo, bits[1]);
 }
 
 void rb_to_tun(EchoProtocol *echo, int *packet_len) {
