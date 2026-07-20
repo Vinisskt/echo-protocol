@@ -5,6 +5,7 @@
 #include "rb_bits.h"
 #include "mod_afsk.h"
 #include "demod_afsk.h"
+#include "rohc.h"
 #include <stdatomic.h>
 
 #define SIZE_BUF 2048
@@ -29,6 +30,7 @@ typedef struct {
     uint32_t last_rx_time;
     atomic_uint_fast8_t packet_ready;
     uint8_t is_compressed;
+    uint8_t is_rohc;
 } RxState;
 
 typedef struct EchoProtocol_s {
@@ -40,6 +42,8 @@ typedef struct EchoProtocol_s {
     StateGoertzel mark_state;
     RxState rx;
     TxState tx;
+    ROHCState rohc_tx;
+    ROHCState rohc_rx;
 } EchoProtocol;
 
 int echo_init(EchoProtocol *echo, char *dev_name);

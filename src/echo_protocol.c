@@ -35,6 +35,10 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
     echo->rx.last_rx_time = 0;
     atomic_store(&echo->rx.packet_ready, 0);
     echo->rx.is_compressed = 0;
+    echo->rx.is_rohc = 0;
+
+    rohc_init(&echo->rohc_tx);
+    rohc_init(&echo->rohc_rx);
 
     echo->tx.tx_sample_count = SAMPLES_PER_BIT; 
 
@@ -43,30 +47,37 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
 
 void tun_to_rb(EchoProtocol *echo) {
     uint8_t raw_buf[SIZE_BUF];
-    uint8_t comp_buf[SIZE_BUF + 64];
+    uint8_t rohc_buf[ROHC_MAX_COMPRESSED];
+    uint8_t lz4_buf[SIZE_BUF + 64];
 
     int nread = tun_read(echo->tun_fd, raw_buf, sizeof(raw_buf));
     if (nread <= 0) return;
 
-    int comp_size = LZ4_compress_default((const char*)raw_buf, (char*)comp_buf, nread, sizeof(comp_buf));
-    
     uint8_t *final_ptr;
     uint16_t final_len;
-    uint8_t comp_flag;
+    uint8_t comp_flag = 0;
+    uint8_t rohc_flag = 0;
 
-    if (comp_size > 0 && comp_size < nread) {
-        final_ptr = comp_buf;
-        final_len = (uint16_t)comp_size;
-        comp_flag = 1;
+    int rohc_size = rohc_compress(&echo->rohc_tx, raw_buf, nread, rohc_buf, sizeof(rohc_buf));
+    if (rohc_size > 0 && rohc_size < nread) {
+        final_ptr = rohc_buf;
+        final_len = (uint16_t)rohc_size;
+        rohc_flag = 1;
     } else {
-        final_ptr = raw_buf;
-        final_len = (uint16_t)nread;
-        comp_flag = 0;
+        int lz4_size = LZ4_compress_default((const char*)raw_buf, (char*)lz4_buf, nread, sizeof(lz4_buf));
+        if (lz4_size > 0 && lz4_size < nread) {
+            final_ptr = lz4_buf;
+            final_len = (uint16_t)lz4_size;
+            comp_flag = 1;
+        } else {
+            final_ptr = raw_buf;
+            final_len = (uint16_t)nread;
+        }
     }
 
-    printf("[TX] Pacote TUN: %d bytes -> Áudio: %d bytes (Comp: %d)\n", nread, final_len, comp_flag);
+    printf("[TX] TUN: %d bytes -> Air: %d bytes (ROHC: %d, LZ4: %d)\n", nread, final_len, rohc_flag, comp_flag);
 
-    uint16_t header = (comp_flag << 15) | (final_len & 0x7FFF);
+    uint16_t header = (comp_flag << 15) | (rohc_flag << 14) | (final_len & 0x3FFF);
     for (int i = 15; i >= 0; i--) {
         uint8_t bit = (header >> i) & 1;
         put_bits(echo->tx_rb, &bit);
@@ -93,7 +104,8 @@ static void handle_data_state(EchoProtocol *echo, uint8_t bit) {
         if (echo->rx.bits_received == 16) {
             uint16_t header = (uint16_t)(echo->rx.header_accumulator & 0xFFFF);
             echo->rx.is_compressed = (header >> 15) & 1;
-            echo->rx.packet_len = header & 0x7FFF;
+            echo->rx.is_rohc = (header >> 14) & 1;
+            echo->rx.packet_len = header & 0x3FFF;
         }
         return;
     }
@@ -152,7 +164,7 @@ void audio_to_rb(EchoProtocol *echo, float *sample) {
 
 void rb_to_tun(EchoProtocol *echo, int *packet_len) {
     uint8_t audio_payload[SIZE_BUF];
-    uint8_t final_ip_packet[SIZE_BUF * 2]; // Buffer maior para descompressão
+    uint8_t final_ip_packet[SIZE_BUF * 2];
     memset(audio_payload, 0, sizeof(audio_payload));
 
     uint8_t bit;
@@ -167,16 +179,19 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
     }
 
     int out_size;
-    if (echo->rx.is_compressed) {
+    if (echo->rx.is_rohc) {
+        out_size = rohc_decompress(&echo->rohc_rx, audio_payload, *packet_len, final_ip_packet, sizeof(final_ip_packet));
+    } else if (echo->rx.is_compressed) {
         out_size = LZ4_decompress_safe((const char*)audio_payload, (char*)final_ip_packet, *packet_len, sizeof(final_ip_packet));
     } else {
         memcpy(final_ip_packet, audio_payload, *packet_len);
         out_size = *packet_len;
+        rohc_sync_context(&echo->rohc_rx, audio_payload, *packet_len);
     }
 
     if (out_size > 0) {
         tun_write(echo->tun_fd, final_ip_packet, out_size);
-        printf("[RX] Pacote entregue: %d bytes (era %d no áudio, Comp: %d)\n", out_size, *packet_len, echo->rx.is_compressed);
+        printf("[RX] Delivered: %d bytes (was %d on air, ROHC: %d, LZ4: %d)\n", out_size, *packet_len, echo->rx.is_rohc, echo->rx.is_compressed);
     }
 }
 
