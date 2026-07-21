@@ -18,18 +18,15 @@ uint16_t ip_checksum(uint8_t *header, int len) {
     return (uint16_t)~(sum & 0xFFFF);
 }
 
-int rohc_compress(ROHCState *state, uint8_t *packet, int packet_len, uint8_t *out, int out_len) {
-    if (packet_len < 20 || (packet[0] & 0xF0) != 0x40) {
-        return 0;
-    }
+static int compress_ipv4(ROHCState *state, uint8_t *packet, int packet_len, uint8_t *out, int out_len) {
+    if (packet_len < 20) return -2;
 
     int ihl = (packet[0] & 0x0F) * 4;
-    if (ihl < 20 || packet_len < ihl) {
-        return 0;
-    }
+    if (ihl < 20 || packet_len < ihl) return -2;
 
     if (!state->context_valid) {
-        memcpy(state->context, packet, ihl < ROHC_CTX_SIZE ? ihl : ROHC_CTX_SIZE);
+        int copy = ihl < ROHC_CTX_SIZE ? ihl : ROHC_CTX_SIZE;
+        memcpy(state->context, packet, copy);
         state->context_valid = 1;
         return 0;
     }
@@ -39,12 +36,14 @@ int rohc_compress(ROHCState *state, uint8_t *packet, int packet_len, uint8_t *ou
     if ((packet[0] & 0xF0) != (ctx[0] & 0xF0) ||
         packet[9] != ctx[9] ||
         memcmp(packet + 12, ctx + 12, 8) != 0) {
-        memcpy(ctx, packet, ihl < ROHC_CTX_SIZE ? ihl : ROHC_CTX_SIZE);
+        int copy = ihl < ROHC_CTX_SIZE ? ihl : ROHC_CTX_SIZE;
+        memcpy(ctx, packet, copy);
         return 0;
     }
 
     if ((packet[0] & 0x0F) != (ctx[0] & 0x0F)) {
-        memcpy(ctx, packet, ihl < ROHC_CTX_SIZE ? ihl : ROHC_CTX_SIZE);
+        int copy = ihl < ROHC_CTX_SIZE ? ihl : ROHC_CTX_SIZE;
+        memcpy(ctx, packet, copy);
         return 0;
     }
 
@@ -66,7 +65,7 @@ int rohc_compress(ROHCState *state, uint8_t *packet, int packet_len, uint8_t *ou
         ((flags & ROHC_FLAG_FLAGS) ? 2 : 0) +
         ((flags & ROHC_FLAG_TTL)   ? 1 : 0) +
         payload_len;
-    if (needed > out_len) return 0;
+    if (needed > out_len) return -3;
 
     int pos = 0;
     out[pos++] = 0;
@@ -86,6 +85,84 @@ int rohc_compress(ROHCState *state, uint8_t *packet, int packet_len, uint8_t *ou
     return pos + payload_len;
 }
 
+static int compress_ipv6(ROHCState *state, uint8_t *packet, int packet_len, uint8_t *out, int out_len) {
+    if (packet_len < 40) return -2;
+
+    if (!state->context_valid) {
+        memcpy(state->context, packet, ROHC_CTX_SIZE);
+        state->context_valid = 1;
+        return 0;
+    }
+
+    uint8_t *ctx = state->context;
+
+    if ((packet[0] & 0xF0) != (ctx[0] & 0xF0) ||
+        packet[6] != ctx[6] ||
+        memcmp(packet + 8, ctx + 8, 32) != 0) {
+        memcpy(ctx, packet, ROHC_CTX_SIZE);
+        return 0;
+    }
+
+    uint8_t flags = 0;
+
+    if (packet[6] != ctx[6]) {
+        flags |= ROHC_V6_FLAG_NEXT_HDR;
+    }
+    if (packet[7] != ctx[7]) {
+        flags |= ROHC_V6_FLAG_HOP_LIMIT;
+    }
+    if ((packet[0] & 0x0F) != (ctx[0] & 0x0F) ||
+        (packet[1] >> 4) != (ctx[1] >> 4)) {
+        flags |= ROHC_V6_FLAG_TC;
+    }
+
+    int payload_len = packet_len - 40;
+    int needed = 1 + 1 + 2 +
+        ((flags & ROHC_V6_FLAG_NEXT_HDR)  ? 1 : 0) +
+        ((flags & ROHC_V6_FLAG_HOP_LIMIT) ? 1 : 0) +
+        ((flags & ROHC_V6_FLAG_TC)        ? 1 : 0) +
+        payload_len;
+    if (needed > out_len) return -3;
+
+    int pos = 0;
+    out[pos++] = ROHC_VERSION_V6;
+    out[pos++] = flags;
+    out[pos++] = packet[4];
+    out[pos++] = packet[5];
+
+    if (flags & ROHC_V6_FLAG_NEXT_HDR)  out[pos++] = packet[6];
+    if (flags & ROHC_V6_FLAG_HOP_LIMIT) out[pos++] = packet[7];
+    if (flags & ROHC_V6_FLAG_TC)        out[pos++] = packet[0] & 0x0F;
+
+    memcpy(out + pos, packet + 40, payload_len);
+
+    ctx[0] = (ctx[0] & 0xF0) | (packet[0] & 0x0F);
+    ctx[1] = (packet[0] & 0x0F) << 4 | (ctx[1] & 0x0F);
+    ctx[4] = packet[4]; ctx[5] = packet[5];
+    ctx[6] = packet[6];
+    ctx[7] = packet[7];
+
+    return pos + payload_len;
+}
+
+int rohc_compress(ROHCState *state, uint8_t *packet, int packet_len, uint8_t *out, int out_len) {
+    if (packet_len < 20) return -2;
+
+    uint8_t version = packet[0] & 0xF0;
+
+    if (version == 0x40) {
+        return compress_ipv4(state, packet, packet_len, out, out_len);
+    }
+
+    if (version == 0x60) {
+        return compress_ipv6(state, packet, packet_len, out, out_len);
+    }
+
+    return -1;
+}
+
+static int rohc_decompress_ipv6(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t *out, int out_len);
+
 int rohc_decompress(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t *out, int out_len) {
     if (!state->context_valid) {
         fprintf(stderr, "[ROHC] No context available for decompression\n");
@@ -96,11 +173,12 @@ int rohc_decompress(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t
         return -1;
     }
 
-    uint8_t ctx_id = compressed[0];
-    uint8_t flags  = compressed[1];
-    int pos = 2;
+    if (compressed[0] & ROHC_VERSION_V6) {
+        return rohc_decompress_ipv6(state, compressed, comp_len, out, out_len);
+    }
 
-    (void)ctx_id;
+    uint8_t flags = compressed[1];
+    int pos = 2;
 
     int ctx_header_size = (state->context[0] & 0x0F) * 4;
     if (ctx_header_size < 20) {
@@ -163,20 +241,84 @@ int rohc_decompress(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t
     return total_len;
 }
 
+static int rohc_decompress_ipv6(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t *out, int out_len) {
+    uint8_t flags = compressed[1];
+    int pos = 2;
+
+    uint8_t rebuilt[40];
+    memcpy(rebuilt, state->context, 40);
+
+    if (pos + 2 > comp_len) return -1;
+    rebuilt[4] = compressed[pos++];
+    rebuilt[5] = compressed[pos++];
+
+    if (flags & ROHC_V6_FLAG_NEXT_HDR) {
+        if (pos + 1 > comp_len) return -1;
+        rebuilt[6] = compressed[pos++];
+    }
+
+    if (flags & ROHC_V6_FLAG_HOP_LIMIT) {
+        if (pos + 1 > comp_len) return -1;
+        rebuilt[7] = compressed[pos++];
+    }
+
+    if (flags & ROHC_V6_FLAG_TC) {
+        if (pos + 1 > comp_len) return -1;
+        uint8_t tc_lo = compressed[pos++];
+        rebuilt[0] = 0x60 | tc_lo;
+        rebuilt[1] = (tc_lo << 4) | (rebuilt[1] & 0x0F);
+    }
+
+    int payload_len = comp_len - pos;
+    if (payload_len < 0) return -1;
+
+    int total_len = 40 + payload_len;
+    if (total_len > out_len) return -1;
+
+    memcpy(out, rebuilt, 40);
+    if (payload_len > 0) {
+        memcpy(out + 40, compressed + pos, payload_len);
+    }
+
+    state->context[0] = rebuilt[0];
+    state->context[1] = rebuilt[1];
+    state->context[4] = rebuilt[4]; state->context[5] = rebuilt[5];
+    state->context[6] = rebuilt[6];
+    state->context[7] = rebuilt[7];
+
+    return total_len;
+}
+
 void rohc_reset(ROHCState *state) {
     state->context_valid = 0;
 }
 
 void rohc_sync_context(ROHCState *state, uint8_t *packet, int packet_len) {
-    if (packet_len < 20 || (packet[0] & 0xF0) != 0x40) return;
-    int ihl = (packet[0] & 0x0F) * 4;
-    if (ihl < 20 || packet_len < ihl) return;
-    int copy_len = ihl < ROHC_CTX_SIZE ? ihl : ROHC_CTX_SIZE;
-    if (!state->context_valid ||
-        (packet[0] & 0xF0) != (state->context[0] & 0xF0) ||
-        packet[9] != state->context[9] ||
-        memcmp(packet + 12, state->context + 12, 8) != 0) {
-        memcpy(state->context, packet, copy_len);
-        state->context_valid = 1;
+    uint8_t version = packet[0] & 0xF0;
+
+    if (version == 0x40) {
+        if (packet_len < 20) return;
+        int ihl = (packet[0] & 0x0F) * 4;
+        if (ihl < 20 || packet_len < ihl) return;
+        int copy_len = ihl < ROHC_CTX_SIZE ? ihl : ROHC_CTX_SIZE;
+        if (!state->context_valid ||
+            (packet[0] & 0xF0) != (state->context[0] & 0xF0) ||
+            packet[9] != state->context[9] ||
+            memcmp(packet + 12, state->context + 12, 8) != 0) {
+            memcpy(state->context, packet, copy_len);
+            state->context_valid = 1;
+        }
+        return;
+    }
+
+    if (version == 0x60) {
+        if (packet_len < 40) return;
+        if (!state->context_valid ||
+            (packet[0] & 0xF0) != (state->context[0] & 0xF0) ||
+            packet[6] != state->context[6] ||
+            memcmp(packet + 8, state->context + 8, 32) != 0) {
+            memcpy(state->context, packet, ROHC_CTX_SIZE);
+            state->context_valid = 1;
+        }
     }
 }
