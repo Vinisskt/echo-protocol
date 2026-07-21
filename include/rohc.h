@@ -3,12 +3,16 @@
 
 #include <stdint.h>
 
-#define ROHC_CTX_SIZE       20
-#define ROHC_FLAG_IP_ID     0x01
-#define ROHC_FLAG_TTL       0x02
-#define ROHC_FLAG_TOS       0x04
-#define ROHC_FLAG_FLAGS     0x08
-#define ROHC_MAX_COMPRESSED (1 + 1 + 2 + 1 + 2 + 2 + 2048)
+#define ROHC_CTX_SIZE          40
+#define ROHC_FLAG_IP_ID        0x01
+#define ROHC_FLAG_TTL          0x02
+#define ROHC_FLAG_TOS          0x04
+#define ROHC_FLAG_FLAGS        0x08
+#define ROHC_V6_FLAG_NEXT_HDR  0x01
+#define ROHC_V6_FLAG_HOP_LIMIT 0x02
+#define ROHC_V6_FLAG_TC        0x04
+#define ROHC_VERSION_V6        0x80
+#define ROHC_MAX_COMPRESSED    (1 + 1 + 2 + 1 + 2 + 2 + 2048)
 
 typedef struct {
     uint8_t  context[ROHC_CTX_SIZE];
