@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <dlfcn.h>
 
 static uint8_t current_tx_symbol = 0;
 
@@ -39,9 +40,17 @@ static int paCallback(const void *inputBuffer, void *outputBuffer,
     return paContinue;
 }
 
+static void suppress_alsa_errors(void) {
+    void *h = dlopen("libasound.so.2", RTLD_LAZY);
+    if (!h) return;
+    void (*set_handler)(void *) = dlsym(h, "snd_lib_error_set_handler");
+    if (set_handler) set_handler(NULL);
+}
+
 int audio_init(AudioState *audio, EchoProtocol *echo, int input_id, int output_id) {
     PaError err;
 
+    suppress_alsa_errors();
     err = Pa_Initialize();
     if (err != paNoError) {
         fprintf(stderr, "Erro ao inicializar PortAudio: %s\n", Pa_GetErrorText(err));
@@ -109,9 +118,15 @@ void audio_close(AudioState *audio) {
 }
 
 void audio_list_devices() {
-    Pa_Initialize();
+    PaError err = Pa_Initialize();
+    if (err != paNoError) {
+        printf("Erro ao inicializar PortAudio: %s\n", Pa_GetErrorText(err));
+        return;
+    }
+
     int numDevices = Pa_GetDeviceCount();
     if (numDevices < 0) {
+        Pa_Terminate();
         printf("Erro ao obter dispositivos: %s\n", Pa_GetErrorText(numDevices));
         return;
     }
