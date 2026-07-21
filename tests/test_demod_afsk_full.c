@@ -6,6 +6,7 @@
 #include <math.h>
 #include "../include/demod_afsk.h"
 #include "../include/mod_afsk.h"
+#include "../include/mod_fsk.h"
 
 static int tests_passed = 0;
 static int tests_failed = 0;
@@ -20,12 +21,12 @@ void test_pre_calc_goertzel_coefficient() {
     StateGoertzel state;
     uint16_t freq = FREQ_MARK;
     pre_calc_goertzel(&state, &freq);
-    float expected_k = ((float)SAMPLES_PER_BIT * FREQ_MARK) / SAMPLE_RATE;
-    float expected_omega = (2.0f * (float)M_PI * expected_k) / SAMPLES_PER_BIT;
+    float expected_k = ((float)SAMPLES_PER_SYMBOL * FREQ_MARK) / SAMPLE_RATE;
+    float expected_omega = (2.0f * (float)M_PI * expected_k) / SAMPLES_PER_SYMBOL;
     float expected_coeff = 2.0f * cosf(expected_omega);
     if (fabsf(state.k - expected_k) > 0.01f) { FAIL("k incorrect"); return; }
     if (fabsf(state.coeff - expected_coeff) > 0.01f) { FAIL("coeff incorrect"); return; }
-    if (state.n != SAMPLES_PER_BIT) { FAIL("n != SAMPLES_PER_BIT"); return; }
+    if (state.n != SAMPLES_PER_SYMBOL) { FAIL("n != SAMPLES_PER_SYMBOL"); return; }
     PASS();
 }
 
