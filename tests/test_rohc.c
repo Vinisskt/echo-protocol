@@ -197,25 +197,25 @@ void test_ip_checksum_correct() {
     PASS();
 }
 
-void test_rohc_compress_non_ip_returns_0() {
-    TEST("rohc_compress returns 0 for non-IPv4 packet");
+void test_rohc_compress_non_ip_rejected() {
+    TEST("rohc_compress returns negative for non-IPv4 packet");
     ROHCState state;
     rohc_init(&state);
     uint8_t non_ip[20] = {0};
     uint8_t out[256];
     int result = rohc_compress(&state, non_ip, 20, out, sizeof(out));
-    if (result != 0) { FAIL("expected 0"); return; }
+    if (result >= 0) { FAIL("expected negative"); return; }
     PASS();
 }
 
-void test_rohc_compress_too_short_returns_0() {
-    TEST("rohc_compress returns 0 for packet < 20 bytes");
+void test_rohc_compress_too_short_rejected() {
+    TEST("rohc_compress returns negative for packet < 20 bytes");
     ROHCState state;
     rohc_init(&state);
     uint8_t short_pkt[10] = {0};
     uint8_t out[256];
     int result = rohc_compress(&state, short_pkt, 10, out, sizeof(out));
-    if (result != 0) { FAIL("expected 0"); return; }
+    if (result >= 0) { FAIL("expected negative"); return; }
     PASS();
 }
 
@@ -540,8 +540,8 @@ int main() {
     test_rohc_compress_tos_change_included();
     test_rohc_compress_flags_change_included();
     test_rohc_compress_tos_stays_compressed_when_unchanged();
-    test_rohc_compress_non_ip_returns_0();
-    test_rohc_compress_too_short_returns_0();
+    test_rohc_compress_non_ip_rejected();
+    test_rohc_compress_too_short_rejected();
 
     printf("\n[decompress]\n");
     test_rohc_decompress_reconstructs_original();
