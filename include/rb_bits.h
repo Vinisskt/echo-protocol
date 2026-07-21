@@ -2,20 +2,21 @@
 #define RB_BITS_H
 
 #include <stdint.h>
+#include <stdatomic.h>
 
 #define BUFFER_SIZE 8192
 #define BUFFER_MASK (BUFFER_SIZE - 1)
 
 typedef struct {
-	uint8_t buf[BUFFER_SIZE];
-	uint16_t head;
-	uint16_t tail;
-	uint8_t count_put;
-	uint8_t count_get;
+    uint8_t buf[BUFFER_SIZE];
+    atomic_uint_fast16_t head;
+    atomic_uint_fast16_t tail;
+    atomic_uint_fast8_t count_put;
+    atomic_uint_fast8_t count_get;
 } Buffer;
 
 Buffer* rb_init();
 uint8_t put_bits(Buffer *buf, uint8_t *bit);
 uint8_t get_bits(Buffer *buf, uint8_t *bit);
 
-#endif // RB_BITS_H
+#endif
