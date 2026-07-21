@@ -1,38 +1,41 @@
 # API do Bit Ring Buffer
 
-Documentação técnica do mecanismo de filas circulares por bit, o coração do desacoplamento de dados no Echo Protocol.
+Fila circular por bit com sincronização atômica lock-free (Single Producer, Single Consumer), coração do desacoplamento entre a thread de áudio e o main loop.
 
 ## Estrutura de Dados
 
 ### `Buffer`
 ```c
-#define BUFFER_SIZE 8192 // 8KB de capacidade por canal (TX/RX)
+#define BUFFER_SIZE 8192
 
 typedef struct {
-    uint8_t buf[BUFFER_SIZE]; 
-    uint16_t head;            // Escrita (Byte)
-    uint16_t tail;            // Leitura (Byte)
-    uint8_t count_put;        // Offset de bit (Escrita)
-    uint8_t count_get;        // Offset de bit (Leitura)
+    uint8_t buf[BUFFER_SIZE];
+    atomic_uint_fast16_t head;      // Escrita (byte index)
+    atomic_uint_fast16_t tail;      // Leitura (byte index)
+    atomic_uint_fast8_t count_put;  // Offset de bit no byte atual (escrita)
+    atomic_uint_fast8_t count_get;  // Offset de bit no byte atual (leitura)
 } Buffer;
 ```
 
-## Funções e Lógica
+Todos os campos de controle (`head`, `tail`, `count_put`, `count_get`) são atômicos, garantindo segurança entre threads sem mutex.
+
+## Funções
 
 ### `put_bits(Buffer *buf, uint8_t *bit)`
-- **Lógica LSB (Least Significant Bit):** Os bits são inseridos da direita para a esquerda dentro de cada byte. 
-- **Decoupling:** Esta função permite que o loop principal insira milhares de bits (como um pacote IP comprimido) instantaneamente, sem precisar esperar o tempo do áudio.
+Produtor (main loop para `tx_rb`, callback de áudio para `rx_rb`). Insere 1 bit no buffer em ordem LSB-first. Se o buffer estiver cheio (`(head+1) & MASK == tail`), retorna 0 e loga `[BUF FULL]`.
 
 ### `get_bits(Buffer *buf, uint8_t *bit)`
-- **Uso no Callback:** É chamada pela thread de áudio a cada 1/1800 de segundo. 
-- **Idle State:** Se retornar `0` (vazio), o modulador deve assumir um estado de repouso (frequência Mark) para manter a portadora sincronizada.
+Consumidor (callback de áudio para `tx_rb`, main loop para `rx_rb`). Lê 1 bit do buffer. Se vazio (`head == tail && count_get == count_put`), retorna 0 e o modulador envia tom idle.
 
-## Por que 8KB?
+## Modelo de Concorrência (SPSC Lock-Free)
 
-Aumentamos o `BUFFER_SIZE` de 1KB para **8KB** por três motivos principais:
-1.  **MTU 1000:** Um pacote IP cheio gera 8000 bits. Precisamos de espaço para pelo menos um pacote inteiro + o preâmbulo.
-2.  **Retransmissão TCP:** O SSH pode disparar vários pacotes de uma vez. O buffer de 8KB age como uma "represa", absorvendo a pressão da rede e liberando os bipes de som em um fluxo constante.
-3.  **LZ4 Efficiency:** Permite lidar com blocos de descompressão maiores sem risco de overflow.
+| Buffer   | Produtor          | Consumidor        |
+|----------|-------------------|--------------------|
+| `tx_rb`  | Main loop         | Callback de áudio  |
+| `rx_rb`  | Callback de áudio | Main loop          |
 
-## Estabilidade de Memória
-- **Zero Alocação Dinâmica no Loop:** Os buffers são alocados no `echo_init` e reutilizados durante toda a sessão, garantindo que o programa nunca trave por falta de memória (OOM) ou latência de Garbage Collector.
+Cada buffer tem exatamente 1 produtor e 1 consumidor. Não há escrita concorrente no mesmo campo — `head` só é escrito pelo produtor, `tail` só pelo consumidor. As operações usam `atomic_load`/`atomic_store` com ordenação `seq_cst` por padrão.
+
+## Capacidade
+
+8KB = 8192 bytes = 65536 bits. Com MTU de 2048 bytes (16384 bits) + 72 bits de overhead (preamble+sync+header), o buffer comporta cerca de 3-4 pacotes completos. Quando o uso ultrapassa 50%, o main loop para de ler do TUN (backpressure), deixando o kernel bufferizar os pacotes.

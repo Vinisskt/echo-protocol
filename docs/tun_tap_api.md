@@ -1,38 +1,43 @@
-# API de Interface TUN/TAP
+# API de Interface TUN
 
-Documentação técnica das funções de baixo nível para criação e configuração automática da interface de rede virtual do Echo Protocol.
+Funções de baixo nível para criação e configuração da interface de rede virtual.
 
 ## Funções de Gerenciamento
 
 ### `tun_alloc(char *dev, int flags)`
-- **Descrição:** Registra uma nova interface TUN no kernel.
-- **Diferencial:** Agora suporta nomes de interface dinâmicos e garante a persistência do file descriptor durante a execução do programa.
+Registra uma nova interface TUN no kernel via `open(/dev/net/tun)` + `ioctl(TUNSETIFF)`. Retorna o file descriptor ou -1 em erro.
 
 ### `tun_set_ip(const char *dev, const char *ip)`
-- **Descrição:** Configura o endereço IPv4 da interface (ex: `10.0.0.1`) e define a máscara de rede padrão (`255.255.255.0`).
-- **Lógica:** Utiliza a `ioctl(SIOCSIFADDR)` para comunicação direta com o kernel, sem chamadas ao shell.
+Configura endereço IPv4 (via `ioctl(SIOCSIFADDR)`) e máscara `255.255.255.0` (via `ioctl(SIOCSIFNETMASK)`).
 
 ### `tun_set_mtu(const char *dev, int mtu)`
-- **Descrição:** Define o tamanho máximo do pacote IP (MTU).
-- **MTU Padrão:** **1000 bytes**.
-- **Impacto:** Ajustar o MTU via `ioctl(SIOCSIFMTU)` é vital para equilibrar a eficiência do bleeep de áudio com a tolerância a ruído do sinal.
+Define o MTU da interface (padrão: 1000). MTU menor reduz latência por pacote.
 
 ### `tun_set_up(const char *dev)`
-- **Descrição:** Sobe a interface (`UP` e `RUNNING`). Sem esta chamada, o kernel não enviaria pacotes para o nosso programa.
+Sobe a interface com flags `IFF_UP | IFF_RUNNING`.
 
 ## I/O de Dados
 
 ### `tun_read(int fd, uint8_t *buf, uint16_t len)`
-- **Descrição:** Lê um pacote IP bruto vindo do sistema operacional.
-- **Ponto Chave:** No `main.c`, o `poll()` detecta quando esta função tem dados prontos.
+Lê um pacote IP bruto do kernel. O main loop usa `poll()` para detectar dados disponíveis.
 
 ### `tun_write(int fd, uint8_t *buf, uint16_t len)`
-- **Descrição:** Injeta um pacote IP reconstruído (após descompressão LZ4) de volta no stack de rede do Linux.
+Injeta um pacote IP reconstruído (após descompressão ROHC ou LZ4) de volta no stack de rede.
 
-## Segurança e Privilégios
-O Echo Protocol agora realiza toda a configuração via **IOCTL**. Isso significa:
-1.  **Segurança:** Não há risco de injeção de comandos via shell (não usamos `system()`).
-2.  **Privilégios:** O binário deve ser executado como `root` ou possuir a capacidade `CAP_NET_ADMIN`.
-    ```bash
-    sudo ./echo-protocol tun0 10.0.0.1 6 6
-    ```
+## Pipeline de Compressão
+
+Os pacotes lidos do TUN passam por compressão antes da transmissão:
+1. **ROHC** — compressão de header IPv4 ou IPv6 (contexto separado TX/RX).
+2. **LZ4** — compressão genérica de payload (fallback quando ROHC não aplicável).
+3. **Raw** — sem compressão (enviado como está, com sincronização de contexto ROHC no receptor).
+
+## Backpressure
+
+Quando o buffer TX atinge >50% de ocupação, o main loop interrompe a leitura do TUN. O kernel bufferiza os pacotes excedentes na fila de saída da interface, aplicando pressão natural de volta para a pilha TCP/IP.
+
+## Privilégios
+
+O binário deve ser executado como root ou com `CAP_NET_ADMIN`:
+```bash
+sudo ./echo-protocol echo0 10.99.0.1 4 2
+```
