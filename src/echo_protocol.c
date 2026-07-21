@@ -52,25 +52,24 @@ void tun_to_rb(EchoProtocol *echo) {
     int nread = tun_read(echo->tun_fd, raw_buf, sizeof(raw_buf));
     if (nread <= 0) return;
 
-    uint8_t *final_ptr;
-    uint16_t final_len;
+    uint8_t *final_ptr = raw_buf;
+    uint16_t final_len = (uint16_t)nread;
     uint8_t comp_flag = 0;
     uint8_t rohc_flag = 0;
 
-    int rohc_size = rohc_compress(&echo->rohc_tx, raw_buf, nread, rohc_buf, sizeof(rohc_buf));
-    if (rohc_size > 0 && rohc_size < nread) {
+    int rohc_result = rohc_compress(&echo->rohc_tx, raw_buf, nread, rohc_buf, sizeof(rohc_buf));
+    if (rohc_result > 0 && rohc_result < nread) {
         final_ptr = rohc_buf;
-        final_len = (uint16_t)rohc_size;
+        final_len = (uint16_t)rohc_result;
         rohc_flag = 1;
-    } else {
+    }
+
+    if (rohc_result < 0) {
         int lz4_size = LZ4_compress_default((const char*)raw_buf, (char*)lz4_buf, nread, sizeof(lz4_buf));
         if (lz4_size > 0 && lz4_size < nread) {
             final_ptr = lz4_buf;
             final_len = (uint16_t)lz4_size;
             comp_flag = 1;
-        } else {
-            final_ptr = raw_buf;
-            final_len = (uint16_t)nread;
         }
     }
 
@@ -97,46 +96,43 @@ static void handle_data_state(EchoProtocol *echo, uint8_t bit) {
     put_bits(echo->rx_rb, &bit);
     echo->rx.bits_received++;
 
-    if (echo->rx.bits_received <= 16) {
-        echo->rx.header_accumulator = (echo->rx.header_accumulator << 1) | bit;
-        
-        if (echo->rx.bits_received == 16) {
-            uint16_t header = (uint16_t)(echo->rx.header_accumulator & 0xFFFF);
-            echo->rx.is_compressed = (header >> 15) & 1;
-            echo->rx.is_rohc = (header >> 14) & 1;
-            echo->rx.packet_len = header & 0x3FFF;
+    if (echo->rx.bits_received > 16) {
+        uint32_t payload_bits = (uint32_t)echo->rx.packet_len * 8;
+        if (echo->rx.bits_received == (payload_bits + 16)) {
+            echo->rx.state = SEARCHING;
+            atomic_store(&echo->rx.packet_ready, 1);
         }
         return;
     }
 
-    uint32_t payload_bits = (uint32_t)echo->rx.packet_len * 8;
-    if (echo->rx.bits_received == (payload_bits + 16)) {
-        echo->rx.state = SEARCHING;
-        atomic_store(&echo->rx.packet_ready, 1);
-    }
+    echo->rx.header_accumulator = (echo->rx.header_accumulator << 1) | bit;
+    if (echo->rx.bits_received != 16) return;
+
+    uint16_t header = (uint16_t)(echo->rx.header_accumulator & 0xFFFF);
+    echo->rx.is_compressed = (header >> 15) & 1;
+    echo->rx.is_rohc = (header >> 14) & 1;
+    echo->rx.packet_len = header & 0x3FFF;
 }
 
 static void process_rx_bit(EchoProtocol *echo, uint8_t bit) {
     time_t now = time(NULL);
 
-    if (echo->rx.state == DATA) {
-        if (now - echo->rx.last_rx_time > 6) {
-            echo->rx.state = SEARCHING;
-            echo->rx.bits_received = 0;
-            printf("[RX] TIMEOUT | state=reset\n");
-            return;
-        }
+    if (echo->rx.state == DATA && now - echo->rx.last_rx_time > 6) {
+        echo->rx.state = SEARCHING;
+        echo->rx.bits_received = 0;
+        printf("[RX] TIMEOUT | state=reset\n");
+        return;
     }
 
     if (echo->rx.state == SEARCHING) {
-        if (check_sync_word(&echo->rx.sync_accumulator, &bit) == 0) {
-            echo->rx.state = DATA;
-            echo->rx.bits_received = 0;
-            echo->rx.packet_len = 0;
-            echo->rx.header_accumulator = 0;
-            echo->rx.last_rx_time = now;
-            printf("[RX] sync=ok\n");
-        }
+        if (check_sync_word(&echo->rx.sync_accumulator, &bit) != 0) return;
+
+        echo->rx.state = DATA;
+        echo->rx.bits_received = 0;
+        echo->rx.packet_len = 0;
+        echo->rx.header_accumulator = 0;
+        echo->rx.last_rx_time = now;
+        printf("[RX] sync=ok\n");
         return;
     }
 
@@ -172,8 +168,9 @@ void audio_to_rb(EchoProtocol *echo, float *sample) {
     process_rx_bit(echo, bits[1]);
 }
 
+static int rx_corrupted = 0;
+
 void rb_to_tun(EchoProtocol *echo, int *packet_len) {
-    static int rx_corrupted = 0;
     uint8_t audio_payload[SIZE_BUF];
     uint8_t final_ip_packet[SIZE_BUF * 2];
     memset(audio_payload, 0, sizeof(audio_payload));
@@ -195,35 +192,40 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
         audio_payload[i >> 3] = (audio_payload[i >> 3] << 1) | bit;
     }
 
-    int out_size;
-    int corrupted = 0;
-    const char *reason = "";
+    int out_size = 0;
 
     if (echo->rx.is_rohc) {
         out_size = rohc_decompress(&echo->rohc_rx, audio_payload, *packet_len, final_ip_packet, sizeof(final_ip_packet));
-        if (out_size <= 0) { corrupted = 1; reason = "rohc_fail"; }
-    } else if (echo->rx.is_compressed) {
+        if (out_size <= 0) {
+            rx_corrupted++;
+            printf("[RX] CORRUPT | reason=rohc_fail | air=%d | total=%d\n", *packet_len, rx_corrupted);
+            return;
+        }
+    }
+
+    if (!echo->rx.is_rohc && echo->rx.is_compressed) {
         out_size = LZ4_decompress_safe((const char*)audio_payload, (char*)final_ip_packet, *packet_len, sizeof(final_ip_packet));
-        if (out_size < 0) { corrupted = 1; reason = "lz4_fail"; out_size = 0; }
-    } else {
+        if (out_size < 0) {
+            rx_corrupted++;
+            printf("[RX] CORRUPT | reason=lz4_fail | air=%d | total=%d\n", *packet_len, rx_corrupted);
+            return;
+        }
+    }
+
+    if (!echo->rx.is_rohc && !echo->rx.is_compressed) {
         memcpy(final_ip_packet, audio_payload, *packet_len);
         out_size = *packet_len;
         rohc_sync_context(&echo->rohc_rx, audio_payload, *packet_len);
     }
 
-    if (!corrupted && out_size >= 20 && (final_ip_packet[0] & 0xF0) == 0x40) {
+    if (out_size >= 20 && (final_ip_packet[0] & 0xF0) == 0x40) {
         int ihl = (final_ip_packet[0] & 0x0F) * 4;
         uint16_t cksum = ip_checksum(final_ip_packet, ihl);
         if (cksum != 0) {
-            corrupted = 1;
-            reason = "ip_cksum";
+            rx_corrupted++;
+            printf("[RX] CORRUPT | reason=ip_cksum | air=%d | total=%d\n", *packet_len, rx_corrupted);
+            return;
         }
-    }
-
-    if (corrupted) {
-        rx_corrupted++;
-        printf("[RX] CORRUPT | reason=%s | air=%d | total=%d\n", reason, *packet_len, rx_corrupted);
-        return;
     }
 
     if (out_size > 0) {
