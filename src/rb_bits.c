@@ -4,46 +4,60 @@
 #include "../include/rb_bits.h"
 
 Buffer* rb_init() {
-	Buffer *buf = malloc(sizeof(Buffer));
-	if (buf == NULL) {
-		return NULL;
-	}
-	buf->head = 0;
-	buf->tail = 0;
-	buf->buf[buf->head] = 0;
-	buf->count_put = 0;
-	buf->count_get = 0;
-	return buf;
+    Buffer *buf = malloc(sizeof(Buffer));
+    if (buf == NULL) {
+        return NULL;
+    }
+    atomic_store(&buf->head, 0);
+    atomic_store(&buf->tail, 0);
+    buf->buf[0] = 0;
+    atomic_store(&buf->count_put, 0);
+    atomic_store(&buf->count_get, 0);
+    return buf;
 }
 
 uint8_t put_bits(Buffer *buf, uint8_t *bit) {
-	if (((buf->head + 1) & BUFFER_MASK) == buf->tail) {
-		return 0;
-	}
-	
-	if (buf->count_put == 8) {
-		buf->head = (buf->head + 1) & BUFFER_MASK;
-		buf->buf[buf->head] = 0;
-		buf->count_put = 0;
-	}
+    uint16_t h = atomic_load(&buf->head);
+    uint16_t t = atomic_load(&buf->tail);
+    if (((h + 1) & BUFFER_MASK) == t) {
+        fprintf(stderr, "[BUF FULL] tx_rb cheio, perdendo bits!\n");
+        return 0;
+    }
 
-	buf->buf[buf->head] |= (*bit << buf->count_put);
-	buf->count_put++;
+    uint8_t cp = atomic_load(&buf->count_put);
+    if (cp == 8) {
+        h = (h + 1) & BUFFER_MASK;
+        atomic_store(&buf->head, h);
+        buf->buf[h] = 0;
+        atomic_store(&buf->count_put, 0);
+        cp = 0;
+    }
 
-	return 1;
+    buf->buf[h] |= (*bit << cp);
+    atomic_store(&buf->count_put, cp + 1);
+
+    return 1;
 }
 
 uint8_t get_bits(Buffer *buf, uint8_t *bit) {
-	if (buf->tail == buf->head && buf->count_get == buf->count_put) {
-		return 0;
-	}
+    uint16_t h = atomic_load(&buf->head);
+    uint16_t t = atomic_load(&buf->tail);
 
-	if (buf->count_get == 8) {
-		buf->tail = (buf->tail + 1) & BUFFER_MASK;
-		buf->count_get = 0;
-	}
+    uint8_t cp = atomic_load(&buf->count_put);
+    uint8_t cg = atomic_load(&buf->count_get);
 
-	*bit = (buf->buf[buf->tail] >> buf->count_get) & 1;
-	buf->count_get++;
-	return 1;
+    if (t == h && cg == cp) {
+        return 0;
+    }
+
+    if (cg == 8) {
+        t = (t + 1) & BUFFER_MASK;
+        atomic_store(&buf->tail, t);
+        atomic_store(&buf->count_get, 0);
+        cg = 0;
+    }
+
+    *bit = (buf->buf[t] >> cg) & 1;
+    atomic_store(&buf->count_get, cg + 1);
+    return 1;
 }
