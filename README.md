@@ -32,12 +32,18 @@ docs/        — Documentação técnica detalhada
 
 ```bash
 make clean && make
-sudo ./echo-protocol echo0 10.99.0.1 4 2   # interface, IP local, input_id, output_id
-sudo ./echo-protocol -l                     # listar dispositivos de áudio
+
+# Listar dispositivos de áudio para descobrir input_id e output_id
+sudo ./echo-protocol -l
+
+# Executar (substitua input_id e output_id pelos valores listados)
+sudo ./echo-protocol echo0 10.99.0.1 <input_id> <output_id>
 
 # Testes
 make -C tests run_tests
 ```
+
+Testes em hardware real foram feitos com **2 cabos P2** (3.5mm) conectando a saída analógica de uma placa à entrada analógica da outra, garantindo isolamento acústico e enlace estável para validação do protocolo.
 
 ## Atribuição
 
