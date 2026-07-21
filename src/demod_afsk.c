@@ -1,5 +1,6 @@
 #include "../include/demod_afsk.h"
 #include "../include/mod_afsk.h"
+#include "../include/mod_fsk.h"
 #include <stdint.h>
 #include <math.h>
 
@@ -15,7 +16,7 @@ uint8_t check_sync_word(uint32_t *check_word, uint8_t *bit) {
 }
 
 void pre_calc_goertzel(StateGoertzel *state, uint16_t *freq) {
-	state->n = SAMPLES_PER_BIT;
+	state->n = SAMPLES_PER_SYMBOL;
 	state->k = ((float)state->n * *freq) / SAMPLE_RATE;
 	state->omega = (2.0f * M_PI * state->k) / state->n;
 	state->coeff = 2.0f * cosf(state->omega);
