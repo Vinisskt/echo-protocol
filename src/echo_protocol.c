@@ -39,6 +39,9 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
     rohc_init(&echo->rohc_tx);
     rohc_init(&echo->rohc_rx);
 
+    scrambler_init(&echo->tx_scrambler);
+    scrambler_init(&echo->rx_scrambler);
+
     echo->tx.tx_sample_count = SAMPLES_PER_SYMBOL; 
 
     memset(&echo->stats, 0, sizeof(echo->stats));
@@ -83,12 +86,14 @@ void tun_to_rb(EchoProtocol *echo) {
     uint16_t header = (comp_flag << 15) | (rohc_flag << 14) | (final_len & 0x3FFF);
     for (int i = 15; i >= 0; i--) {
         uint8_t bit = (header >> i) & 1;
+        bit = scrambler_process(&echo->tx_scrambler, bit);
         put_bits(echo->tx_rb, &bit);
     }
 
     int total_bits = final_len * SIZE_BYTE;
     for (int i = 0; i < total_bits; i++) {
         uint8_t bit = (final_ptr[i >> 3] >> (7 - (i & 7))) & 1;
+        bit = scrambler_process(&echo->tx_scrambler, bit);
         put_bits(echo->tx_rb, &bit);
     }
 }
@@ -98,6 +103,9 @@ void rb_to_audio(EchoProtocol *echo, uint8_t *symbol) {
 }
 
 static void handle_data_state(EchoProtocol *echo, uint8_t bit) {
+    // Descrambling (self-synchronizing, recovers after ~17 bits)
+    bit = scrambler_process(&echo->rx_scrambler, bit);
+
     put_bits(echo->rx_rb, &bit);
     echo->rx.bits_received++;
 
@@ -138,6 +146,7 @@ static void process_rx_bit(EchoProtocol *echo, uint8_t bit) {
         echo->rx.packet_len = 0;
         echo->rx.header_accumulator = 0;
         echo->rx.last_rx_time = now;
+        scrambler_reset(&echo->rx_scrambler);  // New frame = resync scrambler
         echo->stats.rx_sync_found++;
         log_info("RX sync=ok");
         return;

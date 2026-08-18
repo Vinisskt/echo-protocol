@@ -6,6 +6,7 @@
 #include "mod_fsk.h"
 #include "demod_afsk.h"
 #include "rohc.h"
+#include "scrambler.h"
 #include <stdatomic.h>
 
 #define SIZE_BUF 2048
@@ -53,6 +54,8 @@ typedef struct EchoProtocol_s {
     TxState tx;
     ROHCState rohc_tx;
     ROHCState rohc_rx;
+    Scrambler tx_scrambler;
+    Scrambler rx_scrambler;
     ProtocolStats stats;
 } EchoProtocol;
 
