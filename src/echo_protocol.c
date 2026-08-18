@@ -83,6 +83,17 @@ void tun_to_rb(EchoProtocol *echo) {
     echo->stats.tx_packets++;
     echo->stats.tx_bytes += final_len;
 
+    /* Force raw packet every N packets to resync ROHC context on RX (U-mode) */
+    static int tx_raw_counter = 0;
+    if (++tx_raw_counter >= 10) {
+        tx_raw_counter = 0;
+        comp_flag = 0;
+        rohc_flag = 0;
+        final_ptr = raw_buf;
+        final_len = (uint16_t)nread;
+        log_debug("TX force raw for ROHC resync");
+    }
+
     scrambler_reset(&echo->tx_scrambler);
 
     uint16_t header = (comp_flag << 15) | (rohc_flag << 14) | (final_len & 0x3FFF);
