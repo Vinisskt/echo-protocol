@@ -101,12 +101,14 @@ int main(int argc, char *argv[]) {
 
         if (ret > 0 && (fds[0].revents & POLLIN)) {
             uint16_t used = (echo.tx_rb->head - echo.tx_rb->tail) & BUFFER_MASK;
-            if (used > BUFFER_SIZE / 2) {
+            uint16_t free_space = BUFFER_SIZE - used;
+            
+            if (free_space < MAX_TX_FRAME_BYTES) {
                 static time_t last_warn = 0;
                 time_t now = time(NULL);
                 if (now != last_warn) {
                     last_warn = now;
-                    log_warn("TX backlog: tx_rb %d/%d (segurando TUN)", used, BUFFER_SIZE);
+                    log_warn("TX backlog: tx_rb %d/%d free=%d (segurando TUN)", used, BUFFER_SIZE, free_space);
                 }
             } else {
                 push_preamble(echo.tx_rb);

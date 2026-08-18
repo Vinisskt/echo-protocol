@@ -83,18 +83,26 @@ void tun_to_rb(EchoProtocol *echo) {
     echo->stats.tx_packets++;
     echo->stats.tx_bytes += final_len;
 
+    scrambler_reset(&echo->tx_scrambler);
+
     uint16_t header = (comp_flag << 15) | (rohc_flag << 14) | (final_len & 0x3FFF);
     for (int i = 15; i >= 0; i--) {
         uint8_t bit = (header >> i) & 1;
         bit = scrambler_process(&echo->tx_scrambler, bit);
-        put_bits(echo->tx_rb, &bit);
+        if (!put_bits(echo->tx_rb, &bit)) {
+            log_warn("TX buffer full during header, dropping packet");
+            return;
+        }
     }
 
     int total_bits = final_len * SIZE_BYTE;
     for (int i = 0; i < total_bits; i++) {
         uint8_t bit = (final_ptr[i >> 3] >> (7 - (i & 7))) & 1;
         bit = scrambler_process(&echo->tx_scrambler, bit);
-        put_bits(echo->tx_rb, &bit);
+        if (!put_bits(echo->tx_rb, &bit)) {
+            log_warn("TX buffer full during payload, dropping packet");
+            return;
+        }
     }
 }
 
