@@ -1,5 +1,6 @@
 #include "../include/echo_protocol.h"
 #include "../include/audio_io.h"
+#include "../include/log.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +22,7 @@ static int parse_device_id(const char *arg) {
     char *end;
     long val = strtol(arg, &end, 10);
     if (end == arg || *end != '\0') {
-        fprintf(stderr, "Aviso: argumento '%s' nao e um numero valido, usando dispositivo padrao.\n", arg);
+        log_warn("argumento '%s' invalido, usando dispositivo padrao", arg);
         return -1;
     }
     return (int)val;
@@ -40,7 +41,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (argc < 3) {
-        printf("Erro: Faltam argumentos de interface e IP.\n");
+        log_error("faltam argumentos de interface e IP");
         return 1;
     }
 
@@ -50,40 +51,50 @@ int main(int argc, char *argv[]) {
     int input_id  = parse_device_id(argc > 3 ? argv[3] : NULL);
     int output_id = parse_device_id(argc > 4 ? argv[4] : NULL);
 
+    log_init();
+    log_set_console_level(LOG_INFO);
+
     EchoProtocol echo;
     AudioState    audio;
 
     signal(SIGINT, signal_handler);
 
-    printf("[Main] Inicializando Echo Protocol em %s...\n", dev_name);
+    log_info("inicializando Echo Protocol em %s", dev_name);
     if (echo_init(&echo, dev_name) < 0) {
-        fprintf(stderr, "Falha ao inicializar Echo Protocol\n");
+        log_error("echo_init falhou");
         return 1;
     }
 
-    printf("[Main] Configurando interface %s (IP: %s, MTU: 1000)...\n", dev_name, ip_addr);
+    log_info("configurando interface %s (IP: %s, MTU: 1000)", dev_name, ip_addr);
     tun_set_ip(dev_name, ip_addr);
     tun_set_mtu(dev_name, 1000);
     tun_set_up(dev_name);
 
-    printf("[Main] Inicializando PortAudio...\n");
+    log_info("inicializando PortAudio");
     if (audio_init(&audio, &echo, input_id, output_id) < 0) {
+        log_error("audio_init falhou");
         echo_close(&echo);
         return 1;
     }
 
     if (audio_start(&audio) < 0) {
+        log_error("audio_start falhou");
         audio_close(&audio);
         echo_close(&echo);
         return 1;
     }
 
-    printf("[Main] Sistema pronto! SSH via Audio ativo.\n");
-    printf("[Main] Pressione Ctrl+C para encerrar.\n");
+    log_info("warm-up de audio (2s)...");
+    sleep(2);
+
+    log_info("sistema pronto - SSH via audio ativo");
+    log_info("pressione Ctrl+C para encerrar");
 
     struct pollfd fds[1];
     fds[0].fd     = echo.tun_fd;
     fds[0].events = POLLIN;
+
+    time_t last_stats = time(NULL);
 
     while (atomic_load(&keep_running)) {
         int ret = poll(fds, 1, 5);
@@ -95,7 +106,7 @@ int main(int argc, char *argv[]) {
                 time_t now = time(NULL);
                 if (now != last_warn) {
                     last_warn = now;
-                    fprintf(stderr, "[TX BACKLOG] tx_rb em %d/%d (segurando TUN)\n", used, BUFFER_SIZE);
+                    log_warn("TX backlog: tx_rb %d/%d (segurando TUN)", used, BUFFER_SIZE);
                 }
             } else {
                 push_preamble(echo.tx_rb);
@@ -109,13 +120,25 @@ int main(int argc, char *argv[]) {
             if (packet_len > 0) {
                 rb_to_tun(&echo, &packet_len);
             }
-
             atomic_store(&echo.rx.packet_ready, 0);
+        }
+
+        time_t now = time(NULL);
+        if (now - last_stats >= 10) {
+            last_stats = now;
+            uint16_t tx_used = (echo.tx_rb->head - echo.tx_rb->tail) & BUFFER_MASK;
+            uint16_t rx_used = (echo.rx_rb->head - echo.rx_rb->tail) & BUFFER_MASK;
+            log_info("status: TX buf=%d/%d RX buf=%d/%d pkts TX=%llu RX=%llu corrupt=%llu",
+                     tx_used, BUFFER_SIZE, rx_used, BUFFER_SIZE,
+                     (unsigned long long)echo.stats.tx_packets,
+                     (unsigned long long)echo.stats.rx_packets,
+                     (unsigned long long)echo.stats.rx_corrupted);
         }
     }
 
-    printf("\n[Main] Encerrando...\n");
+    log_info("encerrando...");
     audio_close(&audio);
     echo_close(&echo);
+    log_close();
     return 0;
 }

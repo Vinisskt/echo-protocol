@@ -33,6 +33,16 @@ typedef struct {
     uint8_t is_rohc;
 } RxState;
 
+typedef struct {
+    uint64_t tx_packets;
+    uint64_t tx_bytes;
+    uint64_t rx_packets;
+    uint64_t rx_bytes;
+    uint64_t rx_corrupted;
+    uint64_t rx_sync_found;
+    uint64_t rx_timeouts;
+} ProtocolStats;
+
 typedef struct EchoProtocol_s {
     int tun_fd;
     Buffer *tx_rb;
@@ -43,6 +53,7 @@ typedef struct EchoProtocol_s {
     TxState tx;
     ROHCState rohc_tx;
     ROHCState rohc_rx;
+    ProtocolStats stats;
 } EchoProtocol;
 
 int echo_init(EchoProtocol *echo, char *dev_name);
