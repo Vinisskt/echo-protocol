@@ -192,6 +192,18 @@ void audio_to_rb(EchoProtocol *echo, float *sample) {
     process_rx_bit(echo, bits[1]);
 }
 
+static void rx_reset(EchoProtocol *echo) {
+    echo->rx.state = SEARCHING;
+    echo->rx.bits_received = 0;
+    echo->rx.packet_len = 0;
+    echo->rx.header_accumulator = 0;
+    echo->rx.sync_accumulator = 0;
+    echo->rx.is_compressed = 0;
+    echo->rx.is_rohc = 0;
+    rb_reset(echo->rx_rb);
+    scrambler_reset(&echo->rx_scrambler);
+}
+
 void rb_to_tun(EchoProtocol *echo, int *packet_len) {
     uint8_t audio_payload[SIZE_BUF];
     uint8_t final_ip_packet[SIZE_BUF * 2];
@@ -199,19 +211,26 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
 
     uint8_t bit;
     for(int i=0; i<16; i++) {
-        if (get_bits(echo->rx_rb, &bit) == 0) return;
+        if (get_bits(echo->rx_rb, &bit) == 0) {
+            rx_reset(echo);
+            return;
+        }
     }
 
     if (*packet_len <= 0 || *packet_len > SIZE_BUF) {
         echo->stats.rx_corrupted++;
         log_warn("RX corrupt | reason=bad_len | air=%d | total=%llu", *packet_len,
                  (unsigned long long)echo->stats.rx_corrupted);
+        rx_reset(echo);
         return;
     }
 
     int total_bits = (*packet_len) * SIZE_BYTE;
     for (int i = 0; i < total_bits; i++) {
-        if (get_bits(echo->rx_rb, &bit) == 0) return;
+        if (get_bits(echo->rx_rb, &bit) == 0) {
+            rx_reset(echo);
+            return;
+        }
         audio_payload[i >> 3] = (audio_payload[i >> 3] << 1) | bit;
     }
 
@@ -220,14 +239,13 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
     if (echo->rx.is_rohc) {
         out_size = rohc_decompress(&echo->rohc_rx, audio_payload, *packet_len, final_ip_packet, sizeof(final_ip_packet));
         if (out_size <= 0) {
-            /* U-mode sem feedback: se descompressão falha por contexto vazio,
-               tenta sincronizar com o payload raw (pode ser IR disfarçado) */
             rohc_sync_context(&echo->rohc_rx, audio_payload, *packet_len);
             out_size = rohc_decompress(&echo->rohc_rx, audio_payload, *packet_len, final_ip_packet, sizeof(final_ip_packet));
             if (out_size <= 0) {
                 echo->stats.rx_corrupted++;
                 log_warn("RX corrupt | reason=rohc_fail | air=%d | total=%llu", *packet_len,
                          (unsigned long long)echo->stats.rx_corrupted);
+                rx_reset(echo);
                 return;
             }
         }
@@ -239,6 +257,7 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
             echo->stats.rx_corrupted++;
             log_warn("RX corrupt | reason=lz4_fail | air=%d | total=%llu", *packet_len,
                      (unsigned long long)echo->stats.rx_corrupted);
+            rx_reset(echo);
             return;
         }
     }
@@ -256,6 +275,7 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
             echo->stats.rx_corrupted++;
             log_warn("RX corrupt | reason=ip_cksum | air=%d | total=%llu", *packet_len,
                      (unsigned long long)echo->stats.rx_corrupted);
+            rx_reset(echo);
             return;
         }
     }
@@ -267,6 +287,7 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
         log_debug("RX OK | tun=%d | air=%d | rohc=%d | lz4=%d", out_size, *packet_len,
                   echo->rx.is_rohc, echo->rx.is_compressed);
     }
+    rx_reset(echo);
 }
 
 void echo_close(EchoProtocol *echo) {

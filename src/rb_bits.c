@@ -61,3 +61,11 @@ uint8_t get_bits(Buffer *buf, uint8_t *bit) {
     atomic_store(&buf->count_get, cg + 1);
     return 1;
 }
+
+void rb_reset(Buffer *buf) {
+    atomic_store(&buf->head, 0);
+    atomic_store(&buf->tail, 0);
+    buf->buf[0] = 0;
+    atomic_store(&buf->count_put, 0);
+    atomic_store(&buf->count_get, 0);
+}

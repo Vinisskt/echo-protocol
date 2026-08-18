@@ -18,5 +18,6 @@ typedef struct {
 Buffer* rb_init();
 uint8_t put_bits(Buffer *buf, uint8_t *bit);
 uint8_t get_bits(Buffer *buf, uint8_t *bit);
+void rb_reset(Buffer *buf);
 
 #endif
