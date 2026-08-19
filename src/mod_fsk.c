@@ -1,7 +1,7 @@
 #include "../include/mod_fsk.h"
 #include <math.h>
 
-#define SIZE_PREAMBLE (24 - 1)
+#define SIZE_PREAMBLE (16 - 1)
 #define SIZE_SYNC_WORD (32 - 1)
 
 void push_preamble(Buffer *buf) {

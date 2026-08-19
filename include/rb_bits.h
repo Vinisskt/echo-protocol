@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 #include <stdatomic.h>
+#define BUFFER_SIZE 16384
 
-#define BUFFER_SIZE 8192
 #define BUFFER_MASK (BUFFER_SIZE - 1)
 
 typedef struct {

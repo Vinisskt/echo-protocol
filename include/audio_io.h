@@ -10,6 +10,9 @@ typedef struct EchoProtocol_s EchoProtocol;
 typedef struct {
     PaStream *stream;
     EchoProtocol *echo;
+    float tx_gain;
+    float rx_gain;
+    float in_rms;
 } AudioState;
 
 int audio_init(AudioState *audio, EchoProtocol *echo, int input_id, int output_id);

@@ -134,7 +134,8 @@ void test_rohc_compress_ip_id_included() {
     int result = rohc_compress(&state, packet, sizeof(packet), out, sizeof(out));
     if (result <= 0) { FAIL("should compress despite IP ID change"); return; }
     if (!(out[1] & ROHC_FLAG_IP_ID)) { FAIL("IP ID flag should be set"); return; }
-    if (out[2] != 0x56 || out[3] != 0x78) { FAIL("IP ID value wrong"); return; }
+    // CRC at byte 2, IP ID at bytes 3-4
+    if (out[3] != 0x56 || out[4] != 0x78) { FAIL("IP ID value wrong"); return; }
     PASS();
 }
 
@@ -304,7 +305,8 @@ void test_rohc_compress_tos_change_included() {
     int result = rohc_compress(&state, packet, sizeof(packet), out, sizeof(out));
     if (result <= 0) { FAIL("should compress despite ToS change"); return; }
     if (!(out[1] & ROHC_FLAG_TOS)) { FAIL("ToS flag should be set"); return; }
-    if (out[4] != 0xA0) { FAIL("ToS value wrong in compressed"); return; }
+    // CRC at byte 2, IP ID at 3-4, ToS at byte 5
+    if (out[5] != 0xA0) { FAIL("ToS value wrong in compressed"); return; }
     PASS();
 }
 
@@ -321,7 +323,8 @@ void test_rohc_compress_flags_change_included() {
     int result = rohc_compress(&state, packet, sizeof(packet), out, sizeof(out));
     if (result <= 0) { FAIL("should compress despite Flags change"); return; }
     if (!(out[1] & ROHC_FLAG_FLAGS)) { FAIL("Flags flag should be set"); return; }
-    int pos = 4;
+    // CRC at byte 2, IP ID at 3-4
+    int pos = 5;
     if (out[1] & ROHC_FLAG_TOS) pos++;
     if (out[pos] != 0x00 || out[pos+1] != 0x01) { FAIL("Flags value wrong"); return; }
     PASS();

@@ -88,7 +88,7 @@ void tun_to_rb(EchoProtocol *echo) {
 
     /* Force raw packet every N packets to resync ROHC context on RX (U-mode) */
     static int tx_raw_counter = 0;
-    if (++tx_raw_counter >= 10) {
+    if (++tx_raw_counter >= 100) {
         tx_raw_counter = 0;
         comp_flag = 0;
         rohc_flag = 0;
@@ -317,7 +317,7 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
         tun_write(echo->tun_fd, final_ip_packet, out_size);
         echo->stats.rx_packets++;
         echo->stats.rx_bytes += out_size;
-        log_debug("RX OK | tun=%d | air=%d | rohc=%d | lz4=%d", out_size, *packet_len,
+        log_info("RX OK | tun=%d | air=%d | rohc=%d | lz4=%d", out_size, *packet_len,
                   echo->rx.is_rohc, echo->rx.is_compressed);
     }
     rx_reset(echo);

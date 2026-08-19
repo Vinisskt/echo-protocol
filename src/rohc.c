@@ -2,6 +2,17 @@
 #include <string.h>
 #include <stdio.h>
 
+static uint8_t crc8(const uint8_t *data, int len) {
+    uint8_t crc = 0xFF;
+    for (int i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (int j = 0; j < 8; j++) {
+            crc = (crc & 0x80) ? (crc << 1) ^ 0x07 : (crc << 1);
+        }
+    }
+    return crc;
+}
+
 void rohc_init(ROHCState *state) {
     memset(state->context, 0, sizeof(state->context));
     state->context_valid = 0;
@@ -60,7 +71,7 @@ static int compress_ipv4(ROHCState *state, uint8_t *packet, int packet_len, uint
     }
 
     int payload_len = packet_len - ihl;
-    int needed = 1 + 1 + 2 +
+    int needed = 1 + 1 + 1 + 2 +
         ((flags & ROHC_FLAG_TOS)   ? 1 : 0) +
         ((flags & ROHC_FLAG_FLAGS) ? 2 : 0) +
         ((flags & ROHC_FLAG_TTL)   ? 1 : 0) +
@@ -70,12 +81,16 @@ static int compress_ipv4(ROHCState *state, uint8_t *packet, int packet_len, uint
     int pos = 0;
     out[pos++] = 0;
     out[pos++] = flags;
+    out[pos++] = 0;  // CRC placeholder
     out[pos++] = packet[4];
     out[pos++] = packet[5];
     if (flags & ROHC_FLAG_TOS)   out[pos++] = packet[1];
     if (flags & ROHC_FLAG_FLAGS) { out[pos++] = packet[6]; out[pos++] = packet[7]; }
     if (flags & ROHC_FLAG_TTL)   out[pos++] = packet[8];
     memcpy(out + pos, packet + ihl, payload_len);
+
+    // Calculate CRC over header (bytes 0 to pos-1, excluding payload)
+    out[2] = crc8(out, pos);
 
     ctx[1] = packet[1];
     ctx[4] = packet[4]; ctx[5] = packet[5];
@@ -117,7 +132,7 @@ static int compress_ipv6(ROHCState *state, uint8_t *packet, int packet_len, uint
     }
 
     int payload_len = packet_len - 40;
-    int needed = 1 + 1 + 2 +
+    int needed = 1 + 1 + 1 + 2 +
         ((flags & ROHC_V6_FLAG_NEXT_HDR)  ? 1 : 0) +
         ((flags & ROHC_V6_FLAG_HOP_LIMIT) ? 1 : 0) +
         ((flags & ROHC_V6_FLAG_TC)        ? 1 : 0) +
@@ -127,6 +142,7 @@ static int compress_ipv6(ROHCState *state, uint8_t *packet, int packet_len, uint
     int pos = 0;
     out[pos++] = ROHC_VERSION_V6;
     out[pos++] = flags;
+    out[pos++] = 0;  // CRC placeholder
     out[pos++] = packet[4];
     out[pos++] = packet[5];
 
@@ -135,6 +151,9 @@ static int compress_ipv6(ROHCState *state, uint8_t *packet, int packet_len, uint
     if (flags & ROHC_V6_FLAG_TC)        out[pos++] = packet[0] & 0x0F;
 
     memcpy(out + pos, packet + 40, payload_len);
+
+    // Calculate CRC over header (bytes 0 to pos-1, excluding payload)
+    out[2] = crc8(out, pos);
 
     ctx[0] = (ctx[0] & 0xF0) | (packet[0] & 0x0F);
     ctx[1] = (packet[0] & 0x0F) << 4 | (ctx[1] & 0x0F);
@@ -168,8 +187,28 @@ int rohc_decompress(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t
         fprintf(stderr, "[ROHC] No context available for decompression\n");
         return -1;
     }
-    if (comp_len < 4) {
+    if (comp_len < 5) {  // min: version + flags + crc + ip_id(2)
         fprintf(stderr, "[ROHC] Compressed data too short (%d)\n", comp_len);
+        return -1;
+    }
+
+    // Validate CRC first (byte 2 is CRC, covers header with CRC byte zeroed)
+    uint8_t received_crc = compressed[2];
+    uint8_t flags = compressed[1];
+    int header_len = 3 + 2;  // version + flags + crc + ip_id
+    if (flags & ROHC_FLAG_TOS) header_len += 1;
+    if (flags & ROHC_FLAG_FLAGS) header_len += 2;
+    if (flags & ROHC_FLAG_TTL) header_len += 1;
+
+    // Calculate CRC over header with CRC byte zeroed (as during compression)
+    uint8_t header_copy[32];
+    if (header_len > (int)sizeof(header_copy)) return -1;
+    memcpy(header_copy, compressed, header_len);
+    header_copy[2] = 0;  // zero the CRC byte
+    uint8_t calc_crc = crc8(header_copy, header_len);
+    
+    if (received_crc != calc_crc) {
+        fprintf(stderr, "[ROHC] CRC mismatch: got 0x%02X expected 0x%02X\n", received_crc, calc_crc);
         return -1;
     }
 
@@ -177,8 +216,7 @@ int rohc_decompress(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t
         return rohc_decompress_ipv6(state, compressed, comp_len, out, out_len);
     }
 
-    uint8_t flags = compressed[1];
-    int pos = 2;
+    int pos = 3;  // skip version, flags, crc
 
     int ctx_header_size = (state->context[0] & 0x0F) * 4;
     if (ctx_header_size < 20) {
@@ -242,8 +280,28 @@ int rohc_decompress(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t
 }
 
 static int rohc_decompress_ipv6(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t *out, int out_len) {
+    if (comp_len < 5) return -1;
+
+    // Validate CRC
     uint8_t flags = compressed[1];
-    int pos = 2;
+    int header_len = 3 + 2;  // version + flags + crc + ip_id
+    if (flags & ROHC_V6_FLAG_NEXT_HDR) header_len += 1;
+    if (flags & ROHC_V6_FLAG_HOP_LIMIT) header_len += 1;
+    if (flags & ROHC_V6_FLAG_TC) header_len += 1;
+
+    uint8_t received_crc = compressed[2];
+    // Calculate CRC over header with CRC byte zeroed
+    uint8_t header_copy[32];
+    if (header_len > (int)sizeof(header_copy)) return -1;
+    memcpy(header_copy, compressed, header_len);
+    header_copy[2] = 0;
+    uint8_t calc_crc = crc8(header_copy, header_len);
+    if (received_crc != calc_crc) {
+        fprintf(stderr, "[ROHC] IPv6 CRC mismatch: got 0x%02X expected 0x%02X\n", received_crc, calc_crc);
+        return -1;
+    }
+
+    int pos = 3;  // skip version, flags, crc
 
     uint8_t rebuilt[40];
     memcpy(rebuilt, state->context, 40);
@@ -301,24 +359,17 @@ void rohc_sync_context(ROHCState *state, uint8_t *packet, int packet_len) {
         int ihl = (packet[0] & 0x0F) * 4;
         if (ihl < 20 || packet_len < ihl) return;
         int copy_len = ihl < ROHC_CTX_SIZE ? ihl : ROHC_CTX_SIZE;
-        if (!state->context_valid ||
-            (packet[0] & 0xF0) != (state->context[0] & 0xF0) ||
-            packet[9] != state->context[9] ||
-            memcmp(packet + 12, state->context + 12, 8) != 0) {
-            memcpy(state->context, packet, copy_len);
-            state->context_valid = 1;
-        }
+        // Unconditionally accept raw IPv4 packet as IR (context reset)
+        // Per RFC 3095: IR packets carry full static context, always valid
+        memcpy(state->context, packet, copy_len);
+        state->context_valid = 1;
         return;
     }
 
     if (version == 0x60) {
         if (packet_len < 40) return;
-        if (!state->context_valid ||
-            (packet[0] & 0xF0) != (state->context[0] & 0xF0) ||
-            packet[6] != state->context[6] ||
-            memcmp(packet + 8, state->context + 8, 32) != 0) {
-            memcpy(state->context, packet, ROHC_CTX_SIZE);
-            state->context_valid = 1;
-        }
+        // Unconditionally accept raw IPv6 packet as IR
+        memcpy(state->context, packet, ROHC_CTX_SIZE);
+        state->context_valid = 1;
     }
 }
