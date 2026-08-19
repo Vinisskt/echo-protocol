@@ -34,6 +34,7 @@ uint8_t check_sync_word(uint32_t *check_word, uint8_t *bit) {
 		uint32_t diff = corr_reg ^ SYNC_WORD;
 		int matches = 32 - __builtin_popcount(diff);
 		if (matches >= SYNC_THRESHOLD) {
+			sync_correlator_reset();  /* reset correlation on correlation match too */
 			return 0;
 		}
 	}

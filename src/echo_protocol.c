@@ -11,6 +11,7 @@
 
 static void rx_reset(EchoProtocol *echo);
 static uint8_t is_valid_header(uint16_t header);
+static uint8_t is_valid_fec_len(uint16_t len);
 
 int echo_init(EchoProtocol *echo, char *dev_name) {
     
@@ -242,6 +243,28 @@ static void rx_reset(EchoProtocol *echo) {
     echo->rx.is_fec = 0;
     rb_reset(echo->rx_rb);
     scrambler_reset(&echo->rx_scrambler);
+    sync_correlator_reset();
+}
+
+/* Check if a length is a valid FEC-encoded length */
+static uint8_t is_valid_fec_len(uint16_t len) {
+    if (len < 3) return 0;  /* Need at least 2 bytes len + 1 byte data */
+    /* Single block: len = data_len + 2 + ecc, where data_len <= 253, ecc <= 32 */
+    /* Max single block: 255 + 2 = 257, but with ecc: 253 + 2 + 32 = 287 */
+    if (len <= FEC_RS_MAX_N + 2) {
+        /* Could be single block - check if it matches any valid encoding */
+        for (int data_len = 1; data_len <= FEC_RS_MAX_N; data_len++) {
+            if (fec_encoded_len(data_len) == len) return 1;
+        }
+        return 0;
+    }
+    /* Multi-block: must be multiple of FEC_RS_MAX_N plus 2 */
+    if ((len - 2) % FEC_RS_MAX_N == 0) {
+        int nblocks = (len - 2) / FEC_RS_MAX_N;
+        int data_len = nblocks * FEC_RS_MSGBLK;
+        if (fec_encoded_len(data_len) == len) return 1;
+    }
+    return 0;
 }
 
 static uint8_t is_valid_header(uint16_t header) {
@@ -249,10 +272,14 @@ static uint8_t is_valid_header(uint16_t header) {
     uint8_t rohc = (header >> 14) & 1;
     uint8_t fec = (header >> 13) & 1;
     uint16_t len = header & 0x1FFF;
+    // comp and rohc are mutually exclusive (per TX logic)
+    if (comp && rohc) return 0;
     // comp, rohc, fec cannot all be 1 simultaneously (reserved)
     if (comp && rohc && fec) return 0;
     // Length must be reasonable
     if (len == 0 || len > SIZE_BUF) return 0;
+    // If FEC flag set, length must be valid FEC-encoded length
+    if (fec && !is_valid_fec_len(len)) return 0;
     return 1;
 }
 
