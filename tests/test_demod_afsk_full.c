@@ -139,6 +139,7 @@ void test_reset_state_multiple_calls() {
 
 void test_check_sync_word_detects_correctly() {
     TEST("check_sync_word returns 0 on detecting exact SYNC_WORD");
+    sync_correlator_reset();
     uint32_t shift_reg = 0;
     uint8_t bit;
     for (int i = 0; i < 32; i++) {
@@ -157,6 +158,7 @@ void test_check_sync_word_detects_correctly() {
 
 void test_check_sync_word_no_false_positive() {
     TEST("check_sync_word does not false-positive on random bits");
+    sync_correlator_reset();
     uint32_t shift_reg = 0;
     uint8_t bit;
     for (int i = 0; i < 1000; i++) {
@@ -171,6 +173,7 @@ void test_check_sync_word_no_false_positive() {
 
 void test_check_sync_word_persistence() {
     TEST("check_sync_word returns 1 after sync + 1 extra bit");
+    sync_correlator_reset();
     uint32_t shift_reg = 0;
     uint8_t bit;
     for (int i = 31; i >= 0; i--) {
@@ -185,6 +188,7 @@ void test_check_sync_word_persistence() {
 
 void test_check_sync_word_detects_second_sync() {
     TEST("check_sync_word detects a new SYNC_WORD after shifting out the previous one");
+    sync_correlator_reset();
     uint32_t shift_reg = 0;
     uint8_t bit;
 

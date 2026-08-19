@@ -13,6 +13,7 @@ typedef struct {
     float tx_gain;
     float rx_gain;
     float in_rms;
+    int agc_freeze;
 } AudioState;
 
 int audio_init(AudioState *audio, EchoProtocol *echo, int input_id, int output_id);

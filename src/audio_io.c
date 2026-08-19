@@ -18,6 +18,17 @@ static int paCallback(const void *inputBuffer, void *outputBuffer,
     float *out = (float*)outputBuffer;
     float *in = (float*)inputBuffer;
 
+    static int tx_active_frames = 0;
+    uint16_t tx_used = (echo->tx_rb->head - echo->tx_rb->tail) & BUFFER_MASK;
+    int tx_active = (tx_used > 0);
+
+    if (tx_active) {
+        tx_active_frames = 3;
+    } else if (tx_active_frames > 0) {
+        tx_active_frames--;
+    }
+    audio->agc_freeze = (tx_active || tx_active_frames > 0);
+
     for (unsigned int i = 0; i < framesPerBuffer; i++) {
         if (in) {
             audio_to_rb(echo, &in[i]);
@@ -58,6 +69,7 @@ int audio_init(AudioState *audio, EchoProtocol *echo, int input_id, int output_i
     }
 
     audio->echo = echo;
+    audio->agc_freeze = 0;
 
     PaStreamParameters inputParams, outputParams;
 
