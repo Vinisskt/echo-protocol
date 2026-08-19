@@ -8,6 +8,9 @@
 #include <time.h>
 #include <lz4.h>
 
+static void rx_reset(EchoProtocol *echo);
+static uint8_t is_valid_header(uint16_t header);
+
 int echo_init(EchoProtocol *echo, char *dev_name) {
     
     echo->tun_fd = tun_alloc(dev_name, IFF_TUN | IFF_NO_PI);
@@ -144,6 +147,14 @@ static void handle_data_state(EchoProtocol *echo, uint8_t bit) {
     echo->rx.is_compressed = (header >> 15) & 1;
     echo->rx.is_rohc = (header >> 14) & 1;
     echo->rx.packet_len = header & 0x3FFF;
+
+    // Validate header before committing to DATA state
+    if (!is_valid_header(header)) {
+        log_warn("RX invalid header=0x%04X (comp=%u rohc=%u len=%u) -> back to SEARCHING",
+                 header, echo->rx.is_compressed, echo->rx.is_rohc, echo->rx.packet_len);
+        rx_reset(echo);
+        return;
+    }
 }
 
 static void process_rx_bit(EchoProtocol *echo, uint8_t bit) {
@@ -213,6 +224,17 @@ static void rx_reset(EchoProtocol *echo) {
     echo->rx.is_rohc = 0;
     rb_reset(echo->rx_rb);
     scrambler_reset(&echo->rx_scrambler);
+}
+
+static uint8_t is_valid_header(uint16_t header) {
+    uint8_t comp = (header >> 15) & 1;
+    uint8_t rohc = (header >> 14) & 1;
+    uint16_t len = header & 0x3FFF;
+    // Both comp and rohc cannot be 1 simultaneously
+    if (comp && rohc) return 0;
+    // Length must be reasonable
+    if (len == 0 || len > SIZE_BUF) return 0;
+    return 1;
 }
 
 void rb_to_tun(EchoProtocol *echo, int *packet_len) {
