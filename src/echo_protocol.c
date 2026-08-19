@@ -288,9 +288,8 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
 
     /* FEC decoding if flag set */
     uint8_t fec_decoded[SIZE_BUF * 2];
-    int fec_data_len = *packet_len;
     if (echo->rx.is_fec) {
-        int fec_result = fec_decode(audio_payload, *packet_len, fec_data_len, fec_decoded, sizeof(fec_decoded));
+        int fec_result = fec_decode(audio_payload, *packet_len, fec_decoded, sizeof(fec_decoded));
         if (fec_result <= 0) {
             echo->stats.rx_corrupted++;
             log_warn("RX corrupt | reason=fec_fail | air=%d | total=%llu", *packet_len,
@@ -299,8 +298,8 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
             return;
         }
         /* Copy decoded payload back to audio_payload for decompression */
-        memcpy(audio_payload, fec_decoded, fec_data_len);
-        *packet_len = fec_data_len;
+        memcpy(audio_payload, fec_decoded, fec_result);
+        *packet_len = fec_result;
     }
 
     int out_size = 0;

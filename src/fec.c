@@ -259,11 +259,34 @@ int fec_encode(const uint8_t *data, int data_len, uint8_t *out, int out_cap) {
     return nblocks * block_size;
 }
 
-int fec_decode(const uint8_t *in, int fec_len, int data_len,
-               uint8_t *out, int out_cap) {
+/* Calculate original data_len from fec_len by trying possible values */
+static int fec_data_len_from_fec_len(int fec_len) {
+    if (fec_len <= 0) return -1;
+    /* Try single block case: fec_len = data_len + ecc, where ecc = fec_ecc_bytes(data_len) */
+    for (int data_len = 1; data_len <= FEC_RS_MAX_N; data_len++) {
+        if (fec_encoded_len(data_len) == fec_len) {
+            return data_len;
+        }
+    }
+    /* Multi-block: fec_len must be multiple of FEC_RS_MAX_N */
+    if (fec_len % FEC_RS_MAX_N == 0) {
+        int nblocks = fec_len / FEC_RS_MAX_N;
+        int data_len = nblocks * FEC_RS_MSGBLK;
+        if (fec_encoded_len(data_len) == fec_len) {
+            return data_len;
+        }
+    }
+    return -1;
+}
+
+int fec_decode(const uint8_t *in, int fec_len, uint8_t *out, int out_cap) {
     gf_init();
-    if (data_len <= 0 || fec_len != fec_encoded_len(data_len)) return -1;
+    
+    /* Compute original data_len from fec_len */
+    int data_len = fec_data_len_from_fec_len(fec_len);
+    if (data_len <= 0) return -1;
     if (data_len > out_cap) return -1;
+    
     int ecc = fec_ecc_bytes(data_len);
     if (data_len + ecc <= FEC_RS_MAX_N) {
         if (rs_decode_block(in, fec_len, data_len, out) != 0) return -1;

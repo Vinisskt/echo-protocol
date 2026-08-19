@@ -23,8 +23,7 @@
 int  fec_ecc_bytes(int data_len);
 int  fec_encoded_len(int data_len);
 int  fec_encode(const uint8_t *data, int data_len, uint8_t *out, int out_cap);
-int  fec_decode(const uint8_t *in, int fec_len, int data_len,
-                uint8_t *out, int out_cap);
+int  fec_decode(const uint8_t *in, int fec_len, uint8_t *out, int out_cap);
 uint32_t fec_crc32(const uint8_t *data, size_t len);
 
 #endif
