@@ -12,7 +12,7 @@
 
 volatile atomic_int keep_running = 1;
 
-void signal_handler(int sig) {
+static void signal_handler(int sig) {
     (void)sig;
     atomic_store(&keep_running, 0);
 }
@@ -54,10 +54,15 @@ int main(int argc, char *argv[]) {
     log_init();
     log_set_console_level(LOG_INFO);
 
+    struct sigaction sa = {0};
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+
     EchoProtocol echo;
     AudioState    audio;
-
-    signal(SIGINT, signal_handler);
 
     log_info("inicializando Echo Protocol em %s", dev_name);
     if (echo_init(&echo, dev_name) < 0) {

@@ -7,6 +7,10 @@
 
 static uint8_t current_tx_symbol = 0;
 
+/* Static buffers to avoid stack overflow in real-time callback */
+static float mag_static[4];
+static uint8_t bits_static[2];
+
 static int paCallback(const void *inputBuffer, void *outputBuffer,
                       unsigned long framesPerBuffer,
                       const PaStreamCallbackTimeInfo* timeInfo,
@@ -28,6 +32,14 @@ static int paCallback(const void *inputBuffer, void *outputBuffer,
         tx_active_frames--;
     }
     audio->agc_freeze = (tx_active || tx_active_frames > 0);
+
+    /* Handle ALSA xrun/underrun */
+    if (statusFlags & paInputOverflow) {
+        /* Input overflow - data lost, but continue */
+    }
+    if (statusFlags & paOutputUnderflow) {
+        /* Output underrun - silence inserted, but continue */
+    }
 
     for (unsigned int i = 0; i < framesPerBuffer; i++) {
         if (in) {
