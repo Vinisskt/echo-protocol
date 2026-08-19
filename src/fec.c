@@ -226,24 +226,41 @@ int fec_ecc_bytes(int data_len) {
 int fec_encoded_len(int data_len) {
     if (data_len <= 0) return -1;
     int ecc = fec_ecc_bytes(data_len);
-    if (data_len + ecc <= FEC_RS_MAX_N) return data_len + ecc;
+    /* +2 for the data_len prefix (2 bytes) */
+    if (data_len + ecc <= FEC_RS_MAX_N) return data_len + 2 + ecc;
     int nblocks = (data_len + FEC_RS_MSGBLK - 1) / FEC_RS_MSGBLK;
-    return nblocks * FEC_RS_MAX_N;
+    return nblocks * FEC_RS_MAX_N + 2;
 }
 
 int fec_encode(const uint8_t *data, int data_len, uint8_t *out, int out_cap) {
     gf_init();
     if (data_len <= 0) return -1;
     int ecc = fec_ecc_bytes(data_len);
+    
+    /* Prefix original data_len (2 bytes, big-endian) */
+    if (data_len + 2 + ecc > out_cap && data_len + ecc <= FEC_RS_MAX_N) return -1;
+    if (data_len + 2 + ecc > out_cap && data_len + ecc > FEC_RS_MAX_N) return -1;
+    
+    out[0] = (data_len >> 8) & 0xFF;
+    out[1] = data_len & 0xFF;
+    
     if (data_len + ecc <= FEC_RS_MAX_N) {
-        if (data_len + ecc > out_cap) return -1;
-        return rs_encode_block(data, data_len, ecc, out);
+        if (data_len + 2 + ecc > out_cap) return -1;
+        int ret = rs_encode_block(data, data_len, ecc, out + 2);
+        if (ret != data_len + ecc) return -1;
+        return data_len + 2 + ecc;
     }
+    
     int nblocks = (data_len + FEC_RS_MSGBLK - 1) / FEC_RS_MSGBLK;
     int block_size = FEC_RS_MAX_N;
-    if (nblocks * block_size > out_cap) return -1;
+    if (nblocks * block_size + 2 > out_cap) return -1;
+    
+    out[0] = (data_len >> 8) & 0xFF;
+    out[1] = data_len & 0xFF;
+    
     uint8_t *blocks = malloc((size_t)nblocks * (size_t)block_size);
     if (blocks == NULL) return -1;
+    
     for (int r = 0; r < nblocks; r++) {
         int off = r * FEC_RS_MSGBLK;
         int k = data_len - off;
@@ -254,49 +271,41 @@ int fec_encode(const uint8_t *data, int data_len, uint8_t *out, int out_cap) {
         rs_encode_block(blk, FEC_RS_MSGBLK, FEC_RS_PARITY_BLK, blk);
         memcpy(blocks + r * block_size, blk, (size_t)block_size);
     }
-    fec_interleave(blocks, nblocks, block_size, out);
+    
+    /* Interleave starting from offset 2 (after length prefix) */
+    fec_interleave(blocks, nblocks, block_size, out + 2);
     free(blocks);
-    return nblocks * block_size;
+    return nblocks * block_size + 2;
 }
 
-/* Calculate original data_len from fec_len by trying possible values */
-static int fec_data_len_from_fec_len(int fec_len) {
-    if (fec_len <= 0) return -1;
-    /* Try single block case: fec_len = data_len + ecc, where ecc = fec_ecc_bytes(data_len) */
-    for (int data_len = 1; data_len <= FEC_RS_MAX_N; data_len++) {
-        if (fec_encoded_len(data_len) == fec_len) {
-            return data_len;
-        }
-    }
-    /* Multi-block: fec_len must be multiple of FEC_RS_MAX_N */
-    if (fec_len % FEC_RS_MAX_N == 0) {
-        int nblocks = fec_len / FEC_RS_MAX_N;
-        int data_len = nblocks * FEC_RS_MSGBLK;
-        if (fec_encoded_len(data_len) == fec_len) {
-            return data_len;
-        }
-    }
-    return -1;
-}
+
 
 int fec_decode(const uint8_t *in, int fec_len, uint8_t *out, int out_cap) {
     gf_init();
+    if (fec_len < 3) return -1;  /* Need at least 2 bytes length + 1 byte data */
     
-    /* Compute original data_len from fec_len */
-    int data_len = fec_data_len_from_fec_len(fec_len);
-    if (data_len <= 0) return -1;
-    if (data_len > out_cap) return -1;
+    /* Read original data_len from prefix (2 bytes, big-endian) */
+    int data_len = (in[0] << 8) | in[1];
+    if (data_len <= 0 || data_len > out_cap) return -1;
+    
+    /* Skip the 2-byte length prefix */
+    const uint8_t *fec_data = in + 2;
+    int fec_data_len = fec_len - 2;
     
     int ecc = fec_ecc_bytes(data_len);
     if (data_len + ecc <= FEC_RS_MAX_N) {
-        if (rs_decode_block(in, fec_len, data_len, out) != 0) return -1;
+        if (fec_data_len != data_len + ecc) return -1;
+        if (rs_decode_block(fec_data, fec_data_len, data_len, out) != 0) return -1;
         return data_len;
     }
+    
     int nblocks = (data_len + FEC_RS_MSGBLK - 1) / FEC_RS_MSGBLK;
     int block_size = FEC_RS_MAX_N;
+    if (fec_data_len != nblocks * FEC_RS_MAX_N) return -1;
+    
     uint8_t *blocks = malloc((size_t)nblocks * (size_t)block_size);
     if (blocks == NULL) return -1;
-    fec_deinterleave(in, nblocks, block_size, blocks);
+    fec_deinterleave(fec_data, nblocks, block_size, blocks);
     int out_off = 0;
     for (int r = 0; r < nblocks; r++) {
         uint8_t dec[FEC_RS_MAX_N];
