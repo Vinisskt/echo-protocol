@@ -53,8 +53,10 @@ typedef struct {
     int locked;                 /* flag: ganho travado */
     float locked_tx_gain_db;    /* ganho TX travado */
     float locked_rx_gain_db;    /* ganho RX travado */
-    int unlock_corrupt_thresh;  /* corrupções para destravar (ex: 5) */
+    int unlock_corrupt_thresh;  /* corrupções absolutas para destravar (ex: 5) */
     int unlock_rssi_drop_db;    /* queda RSSI para destravar (ex: 6 dB) */
+    time_t last_unlock_time;    /* timestamp do último unlock (cooldown) */
+    int unlock_cooldown_secs;   /* segundos de cooldown antes de re-lock (ex: 30) */
 } AGCState;
 
 void agc_init(AGCState *agc);

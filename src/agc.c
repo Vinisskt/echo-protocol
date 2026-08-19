@@ -38,6 +38,8 @@ void agc_init(AGCState *agc) {
     agc->locked = 0;
     agc->unlock_corrupt_thresh = 5;  /* 5 corrupções = destrava */
     agc->unlock_rssi_drop_db = 6;    /* 6 dB queda = destrava */
+    agc->last_unlock_time = 0;
+    agc->unlock_cooldown_secs = 30;  /* 30s cooldown antes de re-lock */
     const char *e = getenv("ECHO_AGC");
     if (e && strcmp(e, "0") == 0) agc->enabled = 0;
     if (agc->enabled) {
@@ -249,12 +251,22 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
             log_warn("agc unlock | link silencioso | destravando");
             unlock = 1;
         }
+        /* NOVO: unlock por taxa de corrupção (>20% nos pacotes da janela) */
+        if (d_pkts > 10) {  /* só avalia se tem amostras suficientes */
+            float corrupt_rate = (float)d_corrupt / (float)d_pkts;
+            if (corrupt_rate > 0.20f) {  /* >20% corrupção */
+                log_warn("agc unlock | taxa corrupção %.1f%% (%llu/%llu) > 20%% | destravando",
+                         corrupt_rate * 100.0f, (unsigned long long)d_corrupt, (unsigned long long)d_pkts);
+                unlock = 1;
+            }
+        }
 
         if (unlock) {
             agc->locked = 0;
             agc->lock_good_streak = 0;
             agc->phase = AGC_STEADY;
             agc->settle_secs = 5;
+            agc->last_unlock_time = now;  /* registra tempo do unlock para cooldown */
             log_info("agc | DESTRAVADO | voltando para STEADY");
         } else {
             /* LOCKED: mantém ganhos travados, só atualiza timestamp */
@@ -274,18 +286,24 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
     if (good_this_window > 0 && d_corrupt == 0) {
         agc->lock_good_streak += good_this_window;
         if (agc->lock_good_streak >= agc->lock_threshold && !agc->locked) {
-            /* LOCK GAINS */
-            agc->locked = 1;
-            agc->locked_tx_gain_db = linear_to_db(audio->tx_gain);
-            agc->locked_rx_gain_db = linear_to_db(audio->rx_gain);
-            agc->best_rms = rms;
-            agc->phase = AGC_LOCKED;
-            agc->lock_good_streak = 0;
-            log_info("agc | TRAVADO (LOCKED) | tx=%.1f dB rx=%.1f dB rms=%.3f | streak=%d/%d",
-                     agc->locked_tx_gain_db, agc->locked_rx_gain_db, rms,
-                     agc->lock_good_streak, agc->lock_threshold);
-            agc->last_adjust = now;
-            return;
+            /* COOLDOWN: evita re-lock imediato após unlock */
+            if (agc->last_unlock_time > 0 && (now - agc->last_unlock_time) < agc->unlock_cooldown_secs) {
+                log_info("agc | cooldown ativo (%ds/%ds) | aguardando para re-lock",
+                         (int)(now - agc->last_unlock_time), agc->unlock_cooldown_secs);
+            } else {
+                /* LOCK GAINS */
+                agc->locked = 1;
+                agc->locked_tx_gain_db = linear_to_db(audio->tx_gain);
+                agc->locked_rx_gain_db = linear_to_db(audio->rx_gain);
+                agc->best_rms = rms;
+                agc->phase = AGC_LOCKED;
+                agc->lock_good_streak = 0;
+                log_info("agc | TRAVADO (LOCKED) | tx=%.1f dB rx=%.1f dB rms=%.3f | streak=%d/%d",
+                         agc->locked_tx_gain_db, agc->locked_rx_gain_db, rms,
+                         agc->lock_good_streak, agc->lock_threshold);
+                agc->last_adjust = now;
+                return;
+            }
         }
     } else if (d_corrupt > 0) {
         /* corruption resets streak */
