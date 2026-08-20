@@ -6,7 +6,7 @@ Fila circular por bit com sincronização atômica lock-free (Single Producer, S
 
 ### `Buffer`
 ```c
-#define BUFFER_SIZE 8192
+#define BUFFER_SIZE 16384
 
 typedef struct {
     uint8_t buf[BUFFER_SIZE];
@@ -27,6 +27,9 @@ Produtor (main loop para `tx_rb`, callback de áudio para `rx_rb`). Insere 1 bit
 ### `get_bits(Buffer *buf, uint8_t *bit)`
 Consumidor (callback de áudio para `tx_rb`, main loop para `rx_rb`). Lê 1 bit do buffer. Se vazio (`head == tail && count_get == count_put`), retorna 0 e o modulador envia tom idle.
 
+### `rb_reset(Buffer *buf)`
+Reseta o buffer para estado vazio (head=tail, count_put=count_get=0).
+
 ## Modelo de Concorrência (SPSC Lock-Free)
 
 | Buffer   | Produtor          | Consumidor        |
@@ -38,4 +41,4 @@ Cada buffer tem exatamente 1 produtor e 1 consumidor. Não há escrita concorren
 
 ## Capacidade
 
-8KB = 8192 bytes = 65536 bits. Com MTU de 2048 bytes (16384 bits) + 72 bits de overhead (preamble+sync+header), o buffer comporta cerca de 3-4 pacotes completos. Quando o uso ultrapassa 50%, o main loop para de ler do TUN (backpressure), deixando o kernel bufferizar os pacotes.
+16KB = 16384 bytes = 131072 bits. Com MTU de 2048 bytes (16384 bits) + 72 bits de overhead (preamble+sync+header), o buffer comporta cerca de 3-4 pacotes completos. Quando o uso ultrapassa 50%, o main loop para de ler do TUN (backpressure), deixando o kernel bufferizar os pacotes.

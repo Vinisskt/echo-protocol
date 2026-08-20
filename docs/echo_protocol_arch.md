@@ -1,13 +1,13 @@
 # Arquitetura do Echo Protocol
 
-Sistema de rede acústico que transforma a placa de som em uma interface de rede IP transparente. Utiliza modulação 4-FSK, compressão ROHC+LZ4 e buffer circular thread-safe para comunicação via ondas sonoras.
+Sistema de rede acústico que transforma a placa de som em uma interface de rede IP transparente. Utiliza modulação 4-FSK, compressão ROHC+LZ4, FEC (Reed-Solomon) e buffer circular thread-safe para comunicação via ondas sonoras.
 
 ## Estrutura de Dados `EchoProtocol`
 
 Centraliza o estado de todos os módulos com sincronização atômica entre a thread de áudio e o main loop:
 
 - `tun_fd`: Descritor do túnel TUN.
-- `tx_rb` / `rx_rb`: Ring buffers de bits (8KB cada, lock-free SPSC com atomics).
+- `tx_rb` / `rx_rb`: Ring buffers de bits (16KB cada, lock-free SPSC com atomics).
 - `mod_state`: Estado do modulador 4-FSK (4 tons: 2000/3000/4000/5000 Hz).
 - `freq_states[4]`: 4 filtros Goertzel para demodulação.
 - `rx`: Estado do receptor com flag atômica `packet_ready`, timeout de 6s.
@@ -16,13 +16,15 @@ Centraliza o estado de todos os módulos com sincronização atômica entre a th
 
 ## Pipeline de Processamento
 
-### 1. `tun_to_rb` (TX: TUN → Compressão → Buffer)
+### 1. `tun_to_rb` (TX: TUN → Compressão → FEC → Buffer)
 Lê pacote IP do TUN. Tenta compressão na ordem:
 1. **ROHC** — compressão de header (IPv4 ou IPv6)
 2. **LZ4** — compressão genérica do payload (se ROHC não aplicável)
 3. **Raw** — sem compressão (contexto ROHC é sincronizado no RX)
 
-Header de 16 bits: bit 15 = LZ4, bit 14 = ROHC, bits 13-0 = tamanho (max 16383 bytes).
+**FEC (Reed-Solomon + Interleaver)** é aplicado **sempre** após a compressão (ou raw), adicionando paridade para correção de erros.
+
+Header de 16 bits: bit 15 = LZ4, bit 14 = ROHC, bit 13 = FEC, bits 12-0 = tamanho (max 8191 bytes).
 
 ### 2. `rb_to_audio` (Callback de Áudio — thread separada)
 Consome símbolos (2 bits) do `tx_rb` a 1500 baud (3000 bps). Se vazio, envia tom idle (símbolo 3 = 5000 Hz). O callback roda em tempo real pelo PortAudio.
@@ -30,8 +32,8 @@ Consome símbolos (2 bits) do `tx_rb` a 1500 baud (3000 bps). Se vazio, envia to
 ### 3. `audio_to_rb` (Callback → Demodulação → Buffer)
 Processa amostras do microfone via 4 filtros Goertzel. A cada `SAMPLES_PER_SYMBOL` amostras (32 em 48kHz), decide o símbolo de maior energia e extrai 2 bits. Detecta sync word (`0x930B51DE`) para inicio de frame.
 
-### 4. `rb_to_tun` (RX: Buffer → Decompressão → TUN)
-Reconstroi pacote do `rx_rb`. Cada erro (ROHC fail, LZ4 fail, checksum IP inválido) causa return imediato com log. Sem flag `corrupted` carregada entre etapas.
+### 4. `rb_to_tun` (RX: Buffer → FEC decode → Decompressão → TUN)
+Reconstrói pacote do `rx_rb`. Decodifica FEC, depois descomprime ROHC ou LZ4. Cada erro (FEC fail, ROHC fail, LZ4 fail, checksum IP inválido) causa return imediato com log. Sem flag `corrupted` carregada entre etapas.
 
 ## Filosofia de Design
 

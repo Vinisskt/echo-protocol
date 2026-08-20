@@ -22,14 +22,21 @@ Sobe a interface com flags `IFF_UP | IFF_RUNNING`.
 Lê um pacote IP bruto do kernel. O main loop usa `poll()` para detectar dados disponíveis.
 
 ### `tun_write(int fd, uint8_t *buf, uint16_t len)`
-Injeta um pacote IP reconstruído (após descompressão ROHC ou LZ4) de volta no stack de rede.
+Injeta um pacote IP reconstruído (após decodificação FEC, descompressão ROHC ou LZ4) de volta no stack de rede.
 
-## Pipeline de Compressão
+## Pipeline de Compressão (TX)
 
-Os pacotes lidos do TUN passam por compressão antes da transmissão:
+Os pacotes lidos do TUN passam por compressão + FEC antes da transmissão:
 1. **ROHC** — compressão de header IPv4 ou IPv6 (contexto separado TX/RX).
 2. **LZ4** — compressão genérica de payload (fallback quando ROHC não aplicável).
 3. **Raw** — sem compressão (enviado como está, com sincronização de contexto ROHC no receptor).
+4. **FEC (Reed-Solomon + Interleaver)** — **sempre aplicado** após o passo 1/2/3, adiciona paridade para correção de erros no canal acústico.
+
+## Pipeline de Descompressão (RX)
+1. **FEC decode** — Reed-Solomon + deinterleaver (corrige erros do canal).
+2. **ROHC decompress** — reconstrói header IP original.
+3. **LZ4 decompress** — reconstrói payload original.
+4. **Raw** — copia direto (sincroniza contexto ROHC no RX).
 
 ## Backpressure
 
