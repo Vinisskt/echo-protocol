@@ -9,13 +9,52 @@
 #include <time.h>
 #include <lz4.h>
 #include "../include/echo_protocol.h"
+#include "../include/fec.h"
+#include "../include/scrambler.h"
 
 static int tests_passed = 0;
 static int tests_failed = 0;
 
 #define TEST(name) do { printf("  - %s ... ", name); } while(0)
 #define PASS() do { printf("PASS\n"); tests_passed++; } while(0)
-#define FAIL(msg) do { printf("FAIL: %s\n", msg); tests_failed++; } while(0)
+#define FAIL(fmt, ...) do { printf("FAIL: " fmt "\n", ##__VA_ARGS__); tests_failed++; } while(0)
+
+/* Helper: descramble 16 header bits from tx_rb using a fresh scrambler */
+static uint16_t read_header_descrambled(Buffer *tx_rb) {
+    Scrambler s;
+    scrambler_init(&s);
+    uint8_t bit, header_bits[16];
+    for (int i = 0; i < 16; i++) {
+        if (!get_bits(tx_rb, &bit)) return 0xFFFF;
+        bit = scrambler_process(&s, bit);  // descramble
+        header_bits[i] = bit;
+    }
+    uint16_t header = 0;
+    for (int i = 0; i < 16; i++) header = (header << 1) | header_bits[i];
+    return header;
+}
+
+/* Helper: descramble header + payload together using same scrambler state */
+static void read_packet_descrambled(Buffer *tx_rb, uint16_t *out_header, uint8_t *out_payload, int max_payload_bytes) {
+    Scrambler s;
+    scrambler_init(&s);
+    uint8_t bit;
+    uint16_t header = 0;
+    for (int i = 0; i < 16; i++) {
+        if (!get_bits(tx_rb, &bit)) { *out_header = 0xFFFF; return; }
+        bit = scrambler_process(&s, bit);
+        header = (header << 1) | bit;
+    }
+    *out_header = header;
+    int payload_bits = (header & 0x1FFF) * 8;
+    if (payload_bits > max_payload_bytes * 8) payload_bits = max_payload_bytes * 8;
+    memset(out_payload, 0, max_payload_bytes);
+    for (int i = 0; i < payload_bits; i++) {
+        if (!get_bits(tx_rb, &bit)) break;
+        bit = scrambler_process(&s, bit);
+        out_payload[i >> 3] = (out_payload[i >> 3] << 1) | bit;
+    }
+}
 
 void test_echo_init_fails_on_invalid_device() {
     TEST("echo_init fails with invalid device (returns -1)");
@@ -184,30 +223,23 @@ void test_tun_to_rb_via_pipe_no_compression() {
     for (int i = 0; i < 16; i++) packet[i] = rand() & 0xFF;
     write(pipefd[1], packet, sizeof(packet));
     tun_to_rb(&echo);
-    uint8_t bit, header_bits[16];
-    for (int i = 0; i < 16; i++) {
-        if (!get_bits(echo.tx_rb, &bit)) { FAIL("header incomplete"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-        header_bits[i] = bit;
-    }
-    uint16_t header = 0;
-    for (int i = 0; i < 16; i++) {
-        header = (header << 1) | header_bits[i];
-    }
+    uint16_t header;
+    uint8_t payload[64];
+    read_packet_descrambled(echo.tx_rb, &header, payload, sizeof(payload));
+    if (header == 0xFFFF) { FAIL("header incomplete"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
     uint8_t comp_flag = (header >> 15) & 1;
     uint8_t rohc_flag = (header >> 14) & 1;
-    uint16_t packet_len = header & 0x3FFF;
-    if (comp_flag != 0 || rohc_flag != 0 || packet_len != 16) {
-        FAIL("wrong header (compression applied to random data)");
+    uint8_t fec_flag = (header >> 13) & 1;
+    uint16_t packet_len = header & 0x1FFF;
+    int expected_fec_len = fec_encoded_len(16);
+    if (comp_flag != 0 || rohc_flag != 0 || fec_flag != 1 || packet_len != expected_fec_len) {
+        FAIL("wrong header (expected fec_flag=1, len=%d)", expected_fec_len);
         close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
         return;
     }
-    uint8_t out_buf[16];
-    memset(out_buf, 0, sizeof(out_buf));
-    for (int i = 0; i < 16 * 8; i++) {
-        if (!get_bits(echo.tx_rb, &bit)) { FAIL("payload incomplete"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-        out_buf[i >> 3] = (out_buf[i >> 3] << 1) | bit;
-    }
-    if (memcmp(out_buf, packet, 16) != 0) { FAIL("payload corrupted"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    uint8_t decoded[32];
+    int decoded_len = fec_decode(payload, expected_fec_len, decoded, sizeof(decoded));
+    if (decoded_len != 16 || memcmp(decoded, packet, 16) != 0) { FAIL("FEC payload corrupted"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
     PASS();
     close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
 }
@@ -225,21 +257,31 @@ void test_tun_to_rb_with_lz4_compression() {
     memset(packet, 0xAA, sizeof(packet));
     write(pipefd[1], packet, sizeof(packet));
     tun_to_rb(&echo);
-    uint8_t bit, header_bits[16];
-    for (int i = 0; i < 16; i++) {
-        if (!get_bits(echo.tx_rb, &bit)) { FAIL("header incomplete"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-        header_bits[i] = bit;
-    }
-    uint16_t header = 0;
-    for (int i = 0; i < 16; i++) header = (header << 1) | header_bits[i];
+    uint16_t header;
+    uint8_t payload[128];
+    read_packet_descrambled(echo.tx_rb, &header, payload, sizeof(payload));
+    if (header == 0xFFFF) { FAIL("header incomplete"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
     uint8_t comp_flag = (header >> 15) & 1;
-    if (comp_flag != 1) { FAIL("compression not applied to repetitive data"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    uint8_t rohc_flag = (header >> 14) & 1;
+    uint8_t fec_flag = (header >> 13) & 1;
+    uint16_t packet_len = header & 0x1FFF;
+    
+    /* Compute expected LZ4 size properly */
+    uint8_t lz4_buf[192];
+    int lz4_size = LZ4_compress_default((const char*)packet, (char*)lz4_buf, sizeof(packet), sizeof(lz4_buf));
+    int fec_total = (lz4_size > 0 && lz4_size < (int)sizeof(packet)) ? fec_encoded_len(lz4_size) : fec_encoded_len(sizeof(packet));
+    
+    if (comp_flag != 1 || rohc_flag != 0 || fec_flag != 1 || packet_len != fec_total) {
+        FAIL("wrong flags for LZ4+FEC: comp=%d rohc=%d fec=%d len=%d expected=%d (lz4_size=%d)", comp_flag, rohc_flag, fec_flag, packet_len, fec_total, lz4_size);
+        close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
+        return;
+    }
     PASS();
     close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
 }
 
 void test_tun_to_rb_header_16bit_structure() {
-    TEST("tun_to_rb header is 16 bits: 1 compression flag + 15 size bits");
+    TEST("tun_to_rb header is 16 bits: 3 flags (comp,rohc,fec) + 13 length bits");
     int pipefd[2];
     if (pipe(pipefd) == -1) { FAIL("pipe failed"); return; }
     EchoProtocol echo;
@@ -251,14 +293,15 @@ void test_tun_to_rb_header_16bit_structure() {
     memset(packet, 0xFF, sizeof(packet));
     write(pipefd[1], packet, sizeof(packet));
     tun_to_rb(&echo);
+    uint16_t header = read_header_descrambled(echo.tx_rb);
+    if (header == 0xFFFF) { FAIL("header incomplete"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    int fec_total = fec_encoded_len(10);
+    int expected_total_bits = 16 + fec_total * 8;
     int total_bits = 0;
     uint8_t bit;
     while (get_bits(echo.tx_rb, &bit)) total_bits++;
-    int header_bits = 16;
-    int payload_bits = 10 * 8;
-    int expected = header_bits + payload_bits;
-    if (total_bits < expected - 16 || total_bits > expected + 8) {
-        FAIL("total bits does not match header 16 + payload");
+    if (total_bits < expected_total_bits - 16 || total_bits > expected_total_bits + 8) {
+        FAIL("total bits %d does not match header 16 + FEC payload %d", total_bits, expected_total_bits);
         close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
         return;
     }
@@ -406,26 +449,24 @@ void test_rohc_integration_tun_to_rb_compresses_ip() {
     tun_to_rb(&echo);
     write(pipefd[1], pkt, sizeof(pkt));
     tun_to_rb(&echo);
-    uint8_t bit, hdr[16];
-    for (int i = 0; i < 16; i++) {
-        if (!get_bits(echo.tx_rb, &bit)) { FAIL("first header missing"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-        hdr[i] = bit;
-    }
-    uint16_t header1 = 0;
-    for (int i = 0; i < 16; i++) header1 = (header1 << 1) | hdr[i];
-    uint16_t pkt1_len = header1 & 0x3FFF;
-    for (int i = 0; i < pkt1_len * 8; i++) {
-        if (!get_bits(echo.tx_rb, &bit)) break;
-    }
-    uint16_t header2 = 0;
-    for (int i = 0; i < 16; i++) {
-        if (!get_bits(echo.tx_rb, &bit)) { FAIL("second header missing"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-        header2 = (header2 << 1) | bit;
-    }
+    
+    uint16_t header1;
+    uint8_t payload1[64];
+    read_packet_descrambled(echo.tx_rb, &header1, payload1, sizeof(payload1));
+    if (header1 == 0xFFFF) { FAIL("first header missing"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    
+    uint16_t header2;
+    uint8_t payload2[64];
+    read_packet_descrambled(echo.tx_rb, &header2, payload2, sizeof(payload2));
+    if (header2 == 0xFFFF) { FAIL("second header missing"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    
     uint8_t pkt2_rohc = (header2 >> 14) & 1;
-    uint16_t pkt2_len = header2 & 0x3FFF;
+    uint8_t pkt2_fec = (header2 >> 13) & 1;
+    uint16_t pkt2_len = header2 & 0x1FFF;
     if (pkt2_rohc != 1) { FAIL("second packet should use ROHC"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-    if (pkt2_len >= 28) { FAIL("ROHC should reduce size below raw"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    if (pkt2_fec != 1) { FAIL("second packet should have FEC"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    int raw_fec_len = fec_encoded_len(28);
+    if (pkt2_len >= raw_fec_len) { FAIL("ROHC+FEC should reduce size below raw+FEC"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
     PASS();
     close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
 }
@@ -479,7 +520,7 @@ void test_rohc_integration_rb_to_tun_decompresses() {
 }
 
 void test_rohc_integration_header_uses_14bit_length() {
-    TEST("ROHC header uses 14 bits for length (bit 14 = rohc flag, mask 0x3FFF)");
+    TEST("ROHC header uses 13 bits for length (bit 14 = rohc flag, bit 13 = fec flag, mask 0x1FFF)");
     int pipefd[2];
     if (pipe(pipefd) == -1) { FAIL("pipe failed"); return; }
     EchoProtocol echo;
@@ -496,19 +537,24 @@ void test_rohc_integration_header_uses_14bit_length() {
     tun_to_rb(&echo);
     write(pipefd[1], pkt, sizeof(pkt));
     tun_to_rb(&echo);
-    uint8_t bit;
-    for (int i = 0; i < 16; i++) { if (!get_bits(echo.tx_rb, &bit)) { FAIL("first header missing"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; } }
-    int first_pkt_bits = 28 * 8;
-    for (int i = 0; i < first_pkt_bits; i++) { if (!get_bits(echo.tx_rb, &bit)) break; }
-    uint16_t header2 = 0;
-    for (int i = 0; i < 16; i++) {
-        if (!get_bits(echo.tx_rb, &bit)) { FAIL("second header missing"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-        header2 = (header2 << 1) | bit;
-    }
+    
+    uint16_t header1;
+    uint8_t payload1[64];
+    read_packet_descrambled(echo.tx_rb, &header1, payload1, sizeof(payload1));
+    if (header1 == 0xFFFF) { FAIL("first header missing"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    
+    uint16_t header2;
+    uint8_t payload2[64];
+    read_packet_descrambled(echo.tx_rb, &header2, payload2, sizeof(payload2));
+    if (header2 == 0xFFFF) { FAIL("second header missing"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    
     uint8_t rohc_flag = (header2 >> 14) & 1;
-    uint16_t pkt2_len = header2 & 0x3FFF;
+    uint8_t fec_flag = (header2 >> 13) & 1;
+    uint16_t pkt2_len = header2 & 0x1FFF;
     if (rohc_flag != 1) { FAIL("rohc flag not set in second packet"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-    if (pkt2_len == 0 || pkt2_len >= 28) { FAIL("ROHC length out of expected range"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    if (fec_flag != 1) { FAIL("fec flag not set in second packet"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    int raw_fec_len = fec_encoded_len(28);
+    if (pkt2_len == 0 || pkt2_len >= raw_fec_len) { FAIL("ROHC+FEC length out of expected range"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
     PASS();
     close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
 }

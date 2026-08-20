@@ -160,19 +160,14 @@ void test_generate_afsk_continuous_phase() {
 }
 
 void test_push_preamble_alternating_pattern() {
-    TEST("push_preamble inserts 24 bits (8 zeros + 16 alternating 1010...)");
+    TEST("push_preamble inserts 16 bits (PREAMBLE = 0xAAAA = alternating 1010...)");
     Buffer *rb = rb_init();
     assert(rb != NULL);
     push_preamble(rb);
     uint8_t bit;
-    for (int i = 0; i < 24; i++) {
-        if (!get_bits(rb, &bit)) { FAIL("preamble has fewer than 24 bits"); free(rb); return; }
-        uint8_t expected;
-        if (i < 8) {
-            expected = 0;
-        } else {
-            expected = ((i - 8) % 2 == 0) ? 1 : 0;
-        }
+    for (int i = 15; i >= 0; i--) {
+        if (!get_bits(rb, &bit)) { FAIL("preamble has fewer than 16 bits"); free(rb); return; }
+        uint8_t expected = (PREAMBLE >> i) & 1;
         if (bit != expected) { FAIL("preamble bit incorrect"); free(rb); return; }
     }
     PASS();
@@ -201,8 +196,10 @@ void test_push_preamble_and_sync_word_sequence() {
     push_preamble(rb);
     push_sync_word(rb);
     uint8_t bit;
-    for (int i = 0; i < 24; i++) {
+    for (int i = 15; i >= 0; i--) {
         if (!get_bits(rb, &bit)) { FAIL("preamble incomplete"); free(rb); return; }
+        uint8_t expected = (PREAMBLE >> i) & 1;
+        if (bit != expected) { FAIL("preamble bit incorrect after preamble"); free(rb); return; }
     }
     for (int i = 31; i >= 0; i--) {
         if (!get_bits(rb, &bit)) { FAIL("sync word incomplete"); free(rb); return; }
