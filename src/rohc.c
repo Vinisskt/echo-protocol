@@ -18,7 +18,7 @@ void rohc_init(ROHCState *state) {
     state->context_valid = 0;
 }
 
-uint16_t ip_checksum(uint8_t *header, int len) {
+uint16_t ip_checksum(const uint8_t *header, int len) {
     uint32_t sum = 0;
     for (int i = 0; i < len; i += 2) {
         sum += (header[i] << 8) | header[i + 1];
@@ -29,7 +29,7 @@ uint16_t ip_checksum(uint8_t *header, int len) {
     return (uint16_t)~(sum & 0xFFFF);
 }
 
-static int compress_ipv4(ROHCState *state, uint8_t *packet, int packet_len, uint8_t *out, int out_len) {
+static int compress_ipv4(ROHCState *state, const uint8_t *packet, int packet_len, uint8_t *out, int out_len) {
     if (packet_len < 20) return -2;
 
     int ihl = (packet[0] & 0x0F) * 4;
@@ -100,7 +100,7 @@ static int compress_ipv4(ROHCState *state, uint8_t *packet, int packet_len, uint
     return pos + payload_len;
 }
 
-static int compress_ipv6(ROHCState *state, uint8_t *packet, int packet_len, uint8_t *out, int out_len) {
+static int compress_ipv6(ROHCState *state, const uint8_t *packet, int packet_len, uint8_t *out, int out_len) {
     if (packet_len < 40) return -2;
 
     if (!state->context_valid) {
@@ -164,7 +164,7 @@ static int compress_ipv6(ROHCState *state, uint8_t *packet, int packet_len, uint
     return pos + payload_len;
 }
 
-int rohc_compress(ROHCState *state, uint8_t *packet, int packet_len, uint8_t *out, int out_len) {
+int rohc_compress(ROHCState *state, const uint8_t *packet, int packet_len, uint8_t *out, int out_len) {
     if (packet_len < 20) return -2;
 
     uint8_t version = packet[0] & 0xF0;
@@ -180,9 +180,9 @@ int rohc_compress(ROHCState *state, uint8_t *packet, int packet_len, uint8_t *ou
     return -1;
 }
 
-static int rohc_decompress_ipv6(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t *out, int out_len);
+static int rohc_decompress_ipv6(ROHCState *state, const uint8_t *compressed, int comp_len, uint8_t *out, int out_len);
 
-int rohc_decompress(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t *out, int out_len) {
+int rohc_decompress(ROHCState *state, const uint8_t *compressed, int comp_len, uint8_t *out, int out_len) {
     if (!state->context_valid) {
         fprintf(stderr, "[ROHC] No context available for decompression\n");
         return -1;
@@ -279,7 +279,7 @@ int rohc_decompress(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t
     return total_len;
 }
 
-static int rohc_decompress_ipv6(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t *out, int out_len) {
+static int rohc_decompress_ipv6(ROHCState *state, const uint8_t *compressed, int comp_len, uint8_t *out, int out_len) {
     if (comp_len < 5) return -1;
 
     // Validate CRC
@@ -351,7 +351,7 @@ void rohc_reset(ROHCState *state) {
     state->context_valid = 0;
 }
 
-void rohc_sync_context(ROHCState *state, uint8_t *packet, int packet_len) {
+void rohc_sync_context(ROHCState *state, const uint8_t *packet, int packet_len) {
     uint8_t version = packet[0] & 0xF0;
 
     if (version == 0x40) {
