@@ -9,16 +9,42 @@
 #include <time.h>
 #include <lz4.h>
 
-static void rx_reset(EchoProtocol *echo);
-static uint8_t is_valid_header(uint16_t header);
-static uint8_t is_valid_fec_len(uint16_t len);
+#define HEADER_BITS 16
+#define ROHC_RESYNC_INTERVAL 100
+
+/* ── Forward declarations (internal) ────────────────────────────────── */
+static void     rx_reset(EchoProtocol *echo);
+static uint8_t  is_valid_header(uint16_t header);
+static uint8_t  is_valid_fec_len(uint16_t len);
+
+/* ── TX helpers ─────────────────────────────────────────────────────── */
+static int      tx_compress(const uint8_t *raw, int raw_len,
+                            EchoProtocol *echo,
+                            uint8_t *out, uint16_t *out_len,
+                            uint8_t *rohc_flag, uint8_t *comp_flag);
+static int      tx_encode_fec(const uint8_t *data, uint16_t data_len,
+                              uint8_t *out, uint16_t *out_len,
+                              uint8_t *fec_flag);
+static int      tx_push_header(EchoProtocol *echo, uint16_t header);
+static int      tx_push_payload(EchoProtocol *echo, const uint8_t *data, uint16_t len);
+
+/* ── RX helpers ─────────────────────────────────────────────────────── */
+static int      rx_read_header(EchoProtocol *echo, uint16_t *header);
+static int      rx_decode_fec(EchoProtocol *echo,
+                              uint8_t *data, int *data_len);
+static int      rx_decompress(EchoProtocol *echo,
+                              const uint8_t *in, int in_len,
+                              uint8_t *out, int *out_len);
+static int      rx_validate_ip(const uint8_t *pkt, int len);
+static int      rx_deliver_tun(EchoProtocol *echo, const uint8_t *pkt, int len);
+
+/* ══════════════════════════════════════════════════════════════════════
+   echo_init / echo_close
+   ══════════════════════════════════════════════════════════════════════ */
 
 int echo_init(EchoProtocol *echo, char *dev_name) {
-    
     echo->tun_fd = tun_alloc(dev_name, IFF_TUN | IFF_NO_PI);
-    if (echo->tun_fd < 0) {
-        return -1;
-    }
+    if (echo->tun_fd < 0) return -1;
 
     echo->tx_rb = rb_init();
     echo->rx_rb = rb_init();
@@ -26,125 +52,373 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
     pre_calc_fsk(&echo->mod_state);
 
     uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 4; i++)
         pre_calc_goertzel(&echo->freq_states[i], &freqs[i]);
-    }
 
-    echo->rx.state = SEARCHING;
-    echo->rx.sync_accumulator = 0;
-    echo->rx.rx_sample_count = 0;
-    echo->rx.bits_received = 0;
-    echo->rx.packet_len = 0;
-    echo->rx.header_accumulator = 0;
-    echo->rx.last_rx_time = 0;
-    atomic_store(&echo->rx.packet_ready, 0);
-    echo->rx.is_compressed = 0;
-    echo->rx.is_rohc = 0;
+    rx_reset(echo);
 
     rohc_init(&echo->rohc_tx);
     rohc_init(&echo->rohc_rx);
-
     scrambler_init(&echo->tx_scrambler);
     scrambler_init(&echo->rx_scrambler);
 
-    echo->tx.tx_sample_count = SAMPLES_PER_SYMBOL; 
-
+    echo->tx.tx_sample_count = SAMPLES_PER_SYMBOL;
     memset(&echo->stats, 0, sizeof(echo->stats));
+    return 0;
+}
 
+void echo_close(EchoProtocol *echo) {
+    close(echo->tun_fd);
+    free(echo->tx_rb);
+    free(echo->rx_rb);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   TX PATH:  tun_to_rb
+   ══════════════════════════════════════════════════════════════════════ */
+
+static int tx_compress(const uint8_t *raw, int raw_len,
+                       EchoProtocol *echo,
+                       uint8_t *out, uint16_t *out_len,
+                       uint8_t *rohc_flag, uint8_t *comp_flag) {
+    uint8_t rohc_buf[ROHC_MAX_COMPRESSED];
+    uint8_t lz4_buf[SIZE_BUF + 64];
+
+    int rohc_result = rohc_compress(&echo->rohc_tx, raw, raw_len,
+                                     rohc_buf, sizeof(rohc_buf));
+    if (rohc_result > 0 && rohc_result < raw_len) {
+        *out_len = (uint16_t)rohc_result;
+        *rohc_flag = 1;
+        memcpy(out, rohc_buf, *out_len);
+        return 0;
+    }
+
+    if (rohc_result < 0) {
+        int lz4_size = LZ4_compress_default((const char *)raw, (char *)lz4_buf,
+                                            raw_len, sizeof(lz4_buf));
+        if (lz4_size > 0 && lz4_size < raw_len) {
+            *out_len = (uint16_t)lz4_size;
+            *comp_flag = 1;
+            memcpy(out, lz4_buf, *out_len);
+            return 0;
+        }
+    }
+
+    *out_len = (uint16_t)raw_len;
+    memcpy(out, raw, *out_len);
+    return 0;
+}
+
+static int tx_encode_fec(const uint8_t *data, uint16_t data_len,
+                         uint8_t *out, uint16_t *out_len,
+                         uint8_t *fec_flag) {
+    int fec_len = fec_encoded_len(data_len);
+    if (fec_len <= 0 || fec_len > SIZE_BUF * 2)
+        return 0;
+
+    int result = fec_encode(data, data_len, out, SIZE_BUF * 2);
+    if (result <= 0)
+        return 0;
+
+    *out_len = (uint16_t)result;
+    *fec_flag = 1;
+    return 0;
+}
+
+static int tx_push_header(EchoProtocol *echo, uint16_t header) {
+    scrambler_reset(&echo->tx_scrambler);
+
+    for (int i = HEADER_BITS - 1; i >= 0; i--) {
+        uint8_t bit = (header >> i) & 1;
+        bit = scrambler_process(&echo->tx_scrambler, bit);
+        if (!put_bits(echo->tx_rb, &bit)) {
+            log_warn("TX buffer full during header");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int tx_push_payload(EchoProtocol *echo, const uint8_t *data, uint16_t len) {
+    int total_bits = len * SIZE_BYTE;
+    for (int i = 0; i < total_bits; i++) {
+        uint8_t bit = (data[i >> 3] >> (7 - (i & 7))) & 1;
+        bit = scrambler_process(&echo->tx_scrambler, bit);
+        if (!put_bits(echo->tx_rb, &bit)) {
+            log_warn("TX buffer full during payload");
+            return -1;
+        }
+    }
     return 0;
 }
 
 void tun_to_rb(EchoProtocol *echo) {
     uint8_t raw_buf[SIZE_BUF];
-    uint8_t rohc_buf[ROHC_MAX_COMPRESSED];
-    uint8_t lz4_buf[SIZE_BUF + 64];
-    uint8_t fec_buf[SIZE_BUF * 2];  /* FEC adds overhead */
+    uint8_t payload_buf[SIZE_BUF * 2];
+    uint8_t fec_buf[SIZE_BUF * 2];
+    uint16_t payload_len = 0;
+    uint8_t rohc_flag = 0, comp_flag = 0, fec_flag = 0;
 
     int nread = tun_read(echo->tun_fd, raw_buf, sizeof(raw_buf));
     if (nread <= 0) return;
 
-    uint8_t *final_ptr = raw_buf;
-    uint16_t final_len = (uint16_t)nread;
-    uint8_t comp_flag = 0;
-    uint8_t rohc_flag = 0;
-    uint8_t fec_flag = 0;
+    tx_compress(raw_buf, nread, echo, payload_buf, &payload_len,
+                &rohc_flag, &comp_flag);
 
-    int rohc_result = rohc_compress(&echo->rohc_tx, raw_buf, nread, rohc_buf, sizeof(rohc_buf));
-    if (rohc_result > 0 && rohc_result < nread) {
-        final_ptr = rohc_buf;
-        final_len = (uint16_t)rohc_result;
-        rohc_flag = 1;
+    if (tx_encode_fec(payload_buf, payload_len, fec_buf, &payload_len, &fec_flag) == 0) {
+        memcpy(payload_buf, fec_buf, payload_len);
     }
 
-    if (rohc_result < 0) {
-        int lz4_size = LZ4_compress_default((const char*)raw_buf, (char*)lz4_buf, nread, sizeof(lz4_buf));
-        if (lz4_size > 0 && lz4_size < nread) {
-            final_ptr = lz4_buf;
-            final_len = (uint16_t)lz4_size;
-            comp_flag = 1;
-        }
-    }
-
-    /* FEC encoding: wrap compressed/raw payload with Reed-Solomon + interleaver */
-    int fec_len = fec_encoded_len(final_len);
-    if (fec_len > 0 && fec_len <= (int)sizeof(fec_buf)) {
-        int fec_result = fec_encode(final_ptr, final_len, fec_buf, sizeof(fec_buf));
-        if (fec_result > 0 && fec_result <= (int)sizeof(fec_buf)) {
-            final_ptr = fec_buf;
-            final_len = (uint16_t)fec_result;
-            fec_flag = 1;
-        }
-    }
-
-    log_debug("TX | tun=%d | air=%d | rohc=%d | lz4=%d | fec=%d", nread, final_len, rohc_flag, comp_flag, fec_flag);
-
-    echo->stats.tx_packets++;
-    echo->stats.tx_bytes += final_len;
-
-    /* Force raw packet every N packets to resync ROHC context on RX (U-mode) */
     static int tx_raw_counter = 0;
-    if (++tx_raw_counter >= 100) {
+    if (++tx_raw_counter >= ROHC_RESYNC_INTERVAL) {
         tx_raw_counter = 0;
-        comp_flag = 0;
+        payload_len = (uint16_t)nread;
+        memcpy(payload_buf, raw_buf, nread);
         rohc_flag = 0;
+        comp_flag = 0;
         fec_flag = 0;
-        final_ptr = raw_buf;
-        final_len = (uint16_t)nread;
         log_debug("TX force raw for ROHC resync");
     }
 
-    scrambler_reset(&echo->tx_scrambler);
+    uint16_t header = (comp_flag << 15) | (rohc_flag << 14) |
+                      (fec_flag << 13) | (payload_len & 0x1FFF);
 
-    /* Header: bit 15=comp, 14=rohc, 13=fec, 12-0=len (max 8191) */
-    uint16_t header = (comp_flag << 15) | (rohc_flag << 14) | (fec_flag << 13) | (final_len & 0x1FFF);
-    for (int i = 15; i >= 0; i--) {
-        uint8_t bit = (header >> i) & 1;
-        bit = scrambler_process(&echo->tx_scrambler, bit);
-        if (!put_bits(echo->tx_rb, &bit)) {
-            log_warn("TX buffer full during header, dropping packet");
-            return;
-        }
-    }
+    if (tx_push_header(echo, header) < 0) return;
+    if (tx_push_payload(echo, payload_buf, payload_len) < 0) return;
 
-    int total_bits = final_len * SIZE_BYTE;
-    for (int i = 0; i < total_bits; i++) {
-        uint8_t bit = (final_ptr[i >> 3] >> (7 - (i & 7))) & 1;
-        bit = scrambler_process(&echo->tx_scrambler, bit);
-        if (!put_bits(echo->tx_rb, &bit)) {
-            log_warn("TX buffer full during payload, dropping packet");
-            return;
-        }
-    }
+    echo->stats.tx_packets++;
+    echo->stats.tx_bytes += payload_len;
+    log_debug("TX | tun=%d | air=%d | rohc=%d | lz4=%d | fec=%d",
+              nread, payload_len, rohc_flag, comp_flag, fec_flag);
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   TX helper: rb_to_audio (just pass-through)
+   ══════════════════════════════════════════════════════════════════════ */
 
 void rb_to_audio(EchoProtocol *echo, uint8_t *symbol) {
     generate_fsk(&echo->mod_state, symbol);
 }
 
-static void handle_data_state(EchoProtocol *echo, uint8_t bit) {
-    // Descrambling (self-synchronizing, recovers after ~17 bits)
-    bit = scrambler_process(&echo->rx_scrambler, bit);
+/* ══════════════════════════════════════════════════════════════════════
+   RX PATH:  rb_to_tun
+   ══════════════════════════════════════════════════════════════════════ */
 
+static int rx_read_header(EchoProtocol *echo, uint16_t *header) {
+    uint8_t bit;
+    uint32_t acc = 0;
+
+    for (int i = 0; i < HEADER_BITS; i++) {
+        if (!get_bits(echo->rx_rb, &bit)) return -1;
+        acc = (acc << 1) | bit;
+    }
+
+    *header = (uint16_t)(acc & 0xFFFF);
+    echo->rx.is_compressed = (*header >> 15) & 1;
+    echo->rx.is_rohc      = (*header >> 14) & 1;
+    echo->rx.is_fec       = (*header >> 13) & 1;
+    echo->rx.packet_len   = *header & 0x1FFF;
+
+    if (!is_valid_header(*header)) {
+        log_warn("RX invalid header=0x%04X (comp=%u rohc=%u fec=%u len=%u)",
+                 *header, echo->rx.is_compressed, echo->rx.is_rohc,
+                 echo->rx.is_fec, echo->rx.packet_len);
+        return -1;
+    }
+    return 0;
+}
+
+static int rx_decode_fec(EchoProtocol *echo, uint8_t *data, int *data_len) {
+    if (!echo->rx.is_fec) return 0;
+
+    uint8_t decoded[SIZE_BUF * 2];
+    int result = fec_decode(data, *data_len, decoded, sizeof(decoded));
+    if (result <= 0) {
+        echo->stats.rx_corrupted++;
+        log_warn("RX corrupt | reason=fec_fail | air=%d", *data_len);
+        return -1;
+    }
+    memcpy(data, decoded, result);
+    *data_len = result;
+    return 0;
+}
+
+static int rx_decompress(EchoProtocol *echo,
+                         const uint8_t *in, int in_len,
+                         uint8_t *out, int *out_len) {
+    if (echo->rx.is_rohc) {
+        *out_len = rohc_decompress(&echo->rohc_rx, in, in_len,
+                                   out, SIZE_BUF * 2);
+        if (*out_len <= 0) {
+            rohc_sync_context(&echo->rohc_rx, in, in_len);
+            *out_len = rohc_decompress(&echo->rohc_rx, in, in_len,
+                                       out, SIZE_BUF * 2);
+        }
+        if (*out_len <= 0) {
+            echo->stats.rx_corrupted++;
+            log_warn("RX corrupt | reason=rohc_fail | air=%d", in_len);
+            return -1;
+        }
+        return 0;
+    }
+
+    if (echo->rx.is_compressed) {
+        *out_len = LZ4_decompress_safe((const char *)in, (char *)out,
+                                       in_len, SIZE_BUF * 2);
+        if (*out_len < 0) {
+            echo->stats.rx_corrupted++;
+            log_warn("RX corrupt | reason=lz4_fail | air=%d", in_len);
+            return -1;
+        }
+        return 0;
+    }
+
+    memcpy(out, in, in_len);
+    *out_len = in_len;
+    rohc_sync_context(&echo->rohc_rx, in, in_len);
+    return 0;
+}
+
+static int rx_validate_ip(const uint8_t *pkt, int len) {
+    if (len < 20) return 0;
+    if ((pkt[0] & 0xF0) != 0x40) return 0;
+
+    int ihl = (pkt[0] & 0x0F) * 4;
+    if (ip_checksum(pkt, ihl) != 0) return -1;
+    return 0;
+}
+
+static int rx_deliver_tun(EchoProtocol *echo, const uint8_t *pkt, int len) {
+    if (len <= 0) return -1;
+    tun_write(echo->tun_fd, (uint8_t *)pkt, len);
+    echo->stats.rx_packets++;
+    echo->stats.rx_bytes += len;
+    log_info("RX OK | tun=%d | air=%d | rohc=%d | lz4=%d",
+             len, echo->rx.packet_len, echo->rx.is_rohc, echo->rx.is_compressed);
+    return 0;
+}
+
+static int rx_read_payload(EchoProtocol *echo, uint8_t *out, int len) {
+    int total_bits = len * SIZE_BYTE;
+    for (int i = 0; i < total_bits; i++) {
+        uint8_t bit;
+        if (!get_bits(echo->rx_rb, &bit)) return -1;
+        out[i >> 3] = (out[i >> 3] << 1) | bit;
+    }
+    return 0;
+}
+
+void rb_to_tun(EchoProtocol *echo, int *packet_len) {
+    uint16_t header;
+    uint8_t payload[SIZE_BUF * 2];
+    uint8_t final_ip[SIZE_BUF * 2];
+    int payload_len = 0;
+    int out_len = 0;
+
+    if (rx_read_header(echo, &header) < 0) {
+        rx_reset(echo);
+        return;
+    }
+
+    if (*packet_len <= 0 || *packet_len > (int)sizeof(payload)) {
+        echo->stats.rx_corrupted++;
+        log_warn("RX corrupt | reason=bad_len | air=%d", *packet_len);
+        rx_reset(echo);
+        return;
+    }
+
+    if (rx_read_payload(echo, payload, *packet_len) < 0) {
+        rx_reset(echo);
+        return;
+    }
+    payload_len = *packet_len;
+
+    if (rx_decode_fec(echo, payload, &payload_len) < 0) {
+        rx_reset(echo);
+        return;
+    }
+
+    if (rx_decompress(echo, payload, payload_len, final_ip, &out_len) < 0) {
+        rx_reset(echo);
+        return;
+    }
+
+    if (rx_validate_ip(final_ip, out_len) < 0) {
+        echo->stats.rx_corrupted++;
+        log_warn("RX corrupt | reason=ip_cksum | air=%d", *packet_len);
+        rx_reset(echo);
+        return;
+    }
+
+    rx_deliver_tun(echo, final_ip, out_len);
+    rx_reset(echo);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   RX BIT PROCESSING:  audio_to_rb → process_rx_bit
+   ══════════════════════════════════════════════════════════════════════ */
+
+static void rx_reset(EchoProtocol *echo) {
+    echo->rx.state = SEARCHING;
+    echo->rx.bits_received = 0;
+    echo->rx.packet_len = 0;
+    echo->rx.header_accumulator = 0;
+    echo->rx.sync_accumulator = 0;
+    echo->rx.is_compressed = 0;
+    echo->rx.is_rohc = 0;
+    echo->rx.is_fec = 0;
+    rb_reset(echo->rx_rb);
+    scrambler_reset(&echo->rx_scrambler);
+    sync_correlator_reset();
+}
+
+static uint8_t is_valid_fec_len(uint16_t len) {
+    if (len < 3) return 0;
+    if (len <= FEC_RS_MAX_N + 2) {
+        for (int data_len = 1; data_len <= FEC_RS_MAX_N; data_len++) {
+            if (fec_encoded_len(data_len) == len) return 1;
+        }
+        return 0;
+    }
+    if ((len - 2) % FEC_RS_MAX_N == 0) {
+        int nblocks = (len - 2) / FEC_RS_MAX_N;
+        int data_len = nblocks * FEC_RS_MSGBLK;
+        if (fec_encoded_len(data_len) == len) return 1;
+    }
+    return 0;
+}
+
+static uint8_t is_valid_header(uint16_t header) {
+    uint8_t comp = (header >> 15) & 1;
+    uint8_t rohc = (header >> 14) & 1;
+    uint8_t fec  = (header >> 13) & 1;
+    uint16_t len = header & 0x1FFF;
+
+    if (comp && rohc) return 0;
+    if (len == 0 || len > SIZE_BUF) return 0;
+    if (fec && !is_valid_fec_len(len)) return 0;
+    return 1;
+}
+
+static void handle_searching(EchoProtocol *echo, uint8_t bit, time_t now) {
+    if (check_sync_word(&echo->rx.sync_accumulator, &bit) != 0) return;
+
+    echo->rx.state = DATA;
+    echo->rx.bits_received = 0;
+    echo->rx.packet_len = 0;
+    echo->rx.header_accumulator = 0;
+    echo->rx.last_rx_time = now;
+    scrambler_reset(&echo->rx_scrambler);
+    echo->stats.rx_sync_found++;
+    log_info("RX sync=ok");
+}
+
+static void handle_data(EchoProtocol *echo, uint8_t bit, time_t now) {
+    if (echo->rx.bits_received == 0) {
+        echo->rx.last_rx_time = now;
+    }
+
+    bit = scrambler_process(&echo->rx_scrambler, bit);
     put_bits(echo->rx_rb, &bit);
     echo->rx.bits_received++;
 
@@ -166,12 +440,10 @@ static void handle_data_state(EchoProtocol *echo, uint8_t bit) {
     echo->rx.is_fec = (header >> 13) & 1;
     echo->rx.packet_len = header & 0x1FFF;
 
-    // Validate header before committing to DATA state
     if (!is_valid_header(header)) {
         log_warn("RX invalid header=0x%04X (comp=%u rohc=%u fec=%u len=%u) -> back to SEARCHING",
                  header, echo->rx.is_compressed, echo->rx.is_rohc, echo->rx.is_fec, echo->rx.packet_len);
         rx_reset(echo);
-        return;
     }
 }
 
@@ -187,206 +459,33 @@ static void process_rx_bit(EchoProtocol *echo, uint8_t bit) {
     }
 
     if (echo->rx.state == SEARCHING) {
-        if (check_sync_word(&echo->rx.sync_accumulator, &bit) != 0) return;
-
-        echo->rx.state = DATA;
-        echo->rx.bits_received = 0;
-        echo->rx.packet_len = 0;
-        echo->rx.header_accumulator = 0;
-        echo->rx.last_rx_time = now;
-        scrambler_reset(&echo->rx_scrambler);  // New frame = resync scrambler
-        echo->stats.rx_sync_found++;
-        log_info("RX sync=ok");
+        handle_searching(echo, bit, now);
         return;
     }
 
-    echo->rx.last_rx_time = now;
-    handle_data_state(echo, bit);
+    handle_data(echo, bit, now);
 }
 
 void audio_to_rb(EchoProtocol *echo, float *sample) {
     float mag[4];
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 4; i++)
         mag[i] = process_goertzel(&echo->freq_states[i], sample);
-    }
 
-    if (++echo->rx.rx_sample_count < SAMPLES_PER_SYMBOL) {
+    if (++echo->rx.rx_sample_count < SAMPLES_PER_SYMBOL)
         return;
-    }
 
     int max_idx = 0;
-    for (int i = 1; i < 4; i++) {
+    for (int i = 1; i < 4; i++)
         if (mag[i] > mag[max_idx]) max_idx = i;
-    }
 
     uint8_t bits[2];
     bits[0] = (max_idx >> 1) & 1;
     bits[1] = max_idx & 1;
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 4; i++)
         reset_state(&echo->freq_states[i]);
-    }
     echo->rx.rx_sample_count = 0;
 
     process_rx_bit(echo, bits[0]);
     process_rx_bit(echo, bits[1]);
-}
-
-static void rx_reset(EchoProtocol *echo) {
-    echo->rx.state = SEARCHING;
-    echo->rx.bits_received = 0;
-    echo->rx.packet_len = 0;
-    echo->rx.header_accumulator = 0;
-    echo->rx.sync_accumulator = 0;
-    echo->rx.is_compressed = 0;
-    echo->rx.is_rohc = 0;
-    echo->rx.is_fec = 0;
-    rb_reset(echo->rx_rb);
-    scrambler_reset(&echo->rx_scrambler);
-    sync_correlator_reset();
-}
-
-/* Check if a length is a valid FEC-encoded length */
-static uint8_t is_valid_fec_len(uint16_t len) {
-    if (len < 3) return 0;  /* Need at least 2 bytes len + 1 byte data */
-    /* Single block: len = data_len + 2 + ecc, where data_len <= 253, ecc <= 32 */
-    /* Max single block: 255 + 2 = 257, but with ecc: 253 + 2 + 32 = 287 */
-    if (len <= FEC_RS_MAX_N + 2) {
-        /* Could be single block - check if it matches any valid encoding */
-        for (int data_len = 1; data_len <= FEC_RS_MAX_N; data_len++) {
-            if (fec_encoded_len(data_len) == len) return 1;
-        }
-        return 0;
-    }
-    /* Multi-block: must be multiple of FEC_RS_MAX_N plus 2 */
-    if ((len - 2) % FEC_RS_MAX_N == 0) {
-        int nblocks = (len - 2) / FEC_RS_MAX_N;
-        int data_len = nblocks * FEC_RS_MSGBLK;
-        if (fec_encoded_len(data_len) == len) return 1;
-    }
-    return 0;
-}
-
-static uint8_t is_valid_header(uint16_t header) {
-    uint8_t comp = (header >> 15) & 1;
-    uint8_t rohc = (header >> 14) & 1;
-    uint8_t fec = (header >> 13) & 1;
-    uint16_t len = header & 0x1FFF;
-    // comp and rohc are mutually exclusive (per TX logic)
-    if (comp && rohc) return 0;
-    // comp, rohc, fec cannot all be 1 simultaneously (reserved)
-    if (comp && rohc && fec) return 0;
-    // Length must be reasonable
-    if (len == 0 || len > SIZE_BUF) return 0;
-    // If FEC flag set, length must be valid FEC-encoded length
-    if (fec && !is_valid_fec_len(len)) return 0;
-    return 1;
-}
-
-void rb_to_tun(EchoProtocol *echo, int *packet_len) {
-    uint8_t audio_payload[SIZE_BUF * 2];  /* FEC decoded can be larger */
-    uint8_t final_ip_packet[SIZE_BUF * 2];
-    memset(audio_payload, 0, sizeof(audio_payload));
-
-    uint8_t bit;
-    for(int i=0; i<16; i++) {
-        if (get_bits(echo->rx_rb, &bit) == 0) {
-            rx_reset(echo);
-            return;
-        }
-    }
-
-    if (*packet_len <= 0 || *packet_len > (int)sizeof(audio_payload)) {
-        echo->stats.rx_corrupted++;
-        log_warn("RX corrupt | reason=bad_len | air=%d | total=%llu", *packet_len,
-                 (unsigned long long)echo->stats.rx_corrupted);
-        rx_reset(echo);
-        return;
-    }
-
-    int total_bits = (*packet_len) * SIZE_BYTE;
-    for (int i = 0; i < total_bits; i++) {
-        if (get_bits(echo->rx_rb, &bit) == 0) {
-            rx_reset(echo);
-            return;
-        }
-        audio_payload[i >> 3] = (audio_payload[i >> 3] << 1) | bit;
-    }
-
-    /* FEC decoding if flag set */
-    uint8_t fec_decoded[SIZE_BUF * 2];
-    if (echo->rx.is_fec) {
-        int fec_result = fec_decode(audio_payload, *packet_len, fec_decoded, sizeof(fec_decoded));
-        if (fec_result <= 0) {
-            echo->stats.rx_corrupted++;
-            log_warn("RX corrupt | reason=fec_fail | air=%d | total=%llu", *packet_len,
-                     (unsigned long long)echo->stats.rx_corrupted);
-            rx_reset(echo);
-            return;
-        }
-        /* Copy decoded payload back to audio_payload for decompression */
-        memcpy(audio_payload, fec_decoded, fec_result);
-        *packet_len = fec_result;
-    }
-
-    int out_size = 0;
-
-    if (echo->rx.is_rohc) {
-        out_size = rohc_decompress(&echo->rohc_rx, audio_payload, *packet_len, final_ip_packet, sizeof(final_ip_packet));
-        if (out_size <= 0) {
-            rohc_sync_context(&echo->rohc_rx, audio_payload, *packet_len);
-            out_size = rohc_decompress(&echo->rohc_rx, audio_payload, *packet_len, final_ip_packet, sizeof(final_ip_packet));
-            if (out_size <= 0) {
-                echo->stats.rx_corrupted++;
-                log_warn("RX corrupt | reason=rohc_fail | air=%d | total=%llu", *packet_len,
-                         (unsigned long long)echo->stats.rx_corrupted);
-                rx_reset(echo);
-                return;
-            }
-        }
-    }
-
-    if (!echo->rx.is_rohc && echo->rx.is_compressed) {
-        out_size = LZ4_decompress_safe((const char*)audio_payload, (char*)final_ip_packet, *packet_len, sizeof(final_ip_packet));
-        if (out_size < 0) {
-            echo->stats.rx_corrupted++;
-            log_warn("RX corrupt | reason=lz4_fail | air=%d | total=%llu", *packet_len,
-                     (unsigned long long)echo->stats.rx_corrupted);
-            rx_reset(echo);
-            return;
-        }
-    }
-
-    if (!echo->rx.is_rohc && !echo->rx.is_compressed) {
-        memcpy(final_ip_packet, audio_payload, *packet_len);
-        out_size = *packet_len;
-        rohc_sync_context(&echo->rohc_rx, audio_payload, *packet_len);
-    }
-
-    if (out_size >= 20 && (final_ip_packet[0] & 0xF0) == 0x40) {
-        int ihl = (final_ip_packet[0] & 0x0F) * 4;
-        uint16_t cksum = ip_checksum(final_ip_packet, ihl);
-        if (cksum != 0) {
-            echo->stats.rx_corrupted++;
-            log_warn("RX corrupt | reason=ip_cksum | air=%d | total=%llu", *packet_len,
-                     (unsigned long long)echo->stats.rx_corrupted);
-            rx_reset(echo);
-            return;
-        }
-    }
-
-    if (out_size > 0) {
-        tun_write(echo->tun_fd, final_ip_packet, out_size);
-        echo->stats.rx_packets++;
-        echo->stats.rx_bytes += out_size;
-        log_info("RX OK | tun=%d | air=%d | rohc=%d | lz4=%d", out_size, *packet_len,
-                  echo->rx.is_rohc, echo->rx.is_compressed);
-    }
-    rx_reset(echo);
-}
-
-void echo_close(EchoProtocol *echo) {
-    close(echo->tun_fd);
-    free(echo->tx_rb);
-    free(echo->rx_rb);
 }
