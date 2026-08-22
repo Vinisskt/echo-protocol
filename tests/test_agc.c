@@ -333,7 +333,7 @@ void test_agc_unlock_on_corruption_rate() {
 }
 
 void test_agc_unlock_on_silent_link() {
-    TEST("agc unlocks on silent link (no sync, no packets)");
+    TEST("agc stays locked on silent link (keeps gains stable)");
     AGCState agc;
     agc_init(&agc);
     agc.phase = AGC_LOCKED;
@@ -348,7 +348,7 @@ void test_agc_unlock_on_silent_link() {
     
     agc_tune(&agc, &echo, &audio);
     
-    if (agc.locked) { FAIL("not unlocked on silent link"); return; }
+    if (!agc.locked) { FAIL("unlocked on silent link — should stay locked"); return; }
     PASS();
 }
 

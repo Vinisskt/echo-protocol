@@ -12,6 +12,11 @@ void push_preamble(Buffer *buf) {
     }
 }
 
+void push_preamble_n(Buffer *buf, int count) {
+    for (int i = 0; i < count; i++)
+        push_preamble(buf);
+}
+
 void push_sync_word(Buffer *buf) {
     uint8_t bit;
     for (int i = SIZE_SYNC_WORD; i >= 0; i--) {

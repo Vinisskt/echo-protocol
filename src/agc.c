@@ -248,8 +248,11 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
             unlock = 1;
         }
         if (d_sync == 0 && d_pkts == 0) {
-            log_warn("agc unlock | link silencioso | destravando");
-            unlock = 1;
+            /* Silêncio: NÃO destravar — ganhos estão bons da última comunicação.
+             * Destravar aqui causaria re-ajuste desnecessário e corrupção
+             * quando o tráfego voltar (AGC precisa re-estabilizar). */
+            agc->last_adjust = now;
+            return;
         }
         /* NOVO: unlock por taxa de corrupção (>20% nos pacotes da janela) */
         if (d_pkts > 10) {  /* só avalia se tem amostras suficientes */

@@ -32,6 +32,7 @@ typedef struct StateFSK_s {
 void pre_calc_fsk(StateFSK *state);
 float generate_fsk(StateFSK *state, uint8_t *symbol);
 void push_preamble(Buffer *buf);
+void push_preamble_n(Buffer *buf, int count);
 void push_sync_word(Buffer *buf);
 
 #endif

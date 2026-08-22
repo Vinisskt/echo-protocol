@@ -143,9 +143,17 @@ int main(int argc, char *argv[]) {
     fds[0].events = POLLIN;
 
     time_t last_stats = time(NULL);
+    time_t last_tx_time = time(NULL);
+
+    #define KEEPALIVE_INTERVAL 3  /* segundos sem TX → envia keepalive */
+    #define KEEPALIVE_SIZE     20 /* IP header mínimo */
+    #define IDLE_THRESHOLD     5  /* segundos → preamble estendido */
+    #define PREAMBLE_NORMAL    1  /* 1x preamble (16 bits) */
+    #define PREAMBLE_EXTENDED  4  /* 4x preamble (64 bits) — dá tempo ao AGC assentar */
 
     while (atomic_load(&keep_running)) {
         int ret = poll(fds, 1, 5);
+        time_t now = time(NULL);
 
         if (ret > 0 && (fds[0].revents & POLLIN)) {
             uint16_t used = (echo.tx_rb->head - echo.tx_rb->tail) & BUFFER_MASK;
@@ -153,15 +161,53 @@ int main(int argc, char *argv[]) {
             
             if (free_space < MAX_TX_FRAME_BYTES) {
                 static time_t last_warn = 0;
-                time_t now = time(NULL);
                 if (now != last_warn) {
                     last_warn = now;
                     log_warn("TX backlog: tx_rb %d/%d free=%d (segurando TUN)", used, BUFFER_SIZE, free_space);
                 }
             } else {
-                push_preamble(echo.tx_rb);
+                int idle_secs = (int)(now - last_tx_time);
+                int preamble_count = (idle_secs >= IDLE_THRESHOLD) ? PREAMBLE_EXTENDED : PREAMBLE_NORMAL;
+                if (preamble_count > 1)
+                    log_debug("TX idle %ds → preamble %dx", idle_secs, preamble_count);
+                push_preamble_n(echo.tx_rb, preamble_count);
                 push_sync_word(echo.tx_rb);
                 tun_to_rb(&echo);
+            }
+            last_tx_time = now;
+        }
+
+        /* Keepalive: envia pacote mínimo se idle por KEEPALIVE_INTERVAL segundos
+         * Mantém AGC lock, contexto ROHC e sincronia do scrambler */
+        if ((now - last_tx_time) >= KEEPALIVE_INTERVAL) {
+            uint16_t used = (echo.tx_rb->head - echo.tx_rb->tail) & BUFFER_MASK;
+            if (used < BUFFER_SIZE - MAX_TX_FRAME_BYTES) {
+                /* IP header mínimo: versão=4, IHL=5, len=20, proto=0 (reservado) */
+                uint8_t keepalive[KEEPALIVE_SIZE] = {0};
+                keepalive[0] = 0x45;  /* version=4, IHL=5 */
+                keepalive[2] = 0x00; keepalive[3] = 0x14;  /* total length = 20 */
+                keepalive[8] = 0x40; keepalive[9] = 0x00;  /* TTL=64 */
+                keepalive[9] = 0x00;  /* protocol=0 (keepalive) */
+                uint16_t ck = ip_checksum(keepalive, 20);
+                keepalive[10] = (ck >> 8) & 0xFF;
+                keepalive[11] = ck & 0xFF;
+
+                /* Injeta como se fosse pacote TUN */
+                push_preamble(echo.tx_rb);
+                push_sync_word(echo.tx_rb);
+                scrambler_reset(&echo.tx_scrambler);
+                uint16_t header = (KEEPALIVE_SIZE & 0x1FFF);
+                for (int b = 15; b >= 0; b--) {
+                    uint8_t bit = (header >> b) & 1;
+                    bit = scrambler_process(&echo.tx_scrambler, bit);
+                    put_bits(echo.tx_rb, &bit);
+                }
+                for (int b = 0; b < KEEPALIVE_SIZE * 8; b++) {
+                    uint8_t bit = (keepalive[b >> 3] >> (7 - (b & 7))) & 1;
+                    bit = scrambler_process(&echo.tx_scrambler, bit);
+                    put_bits(echo.tx_rb, &bit);
+                }
+                last_tx_time = now;
             }
         }
 
@@ -173,7 +219,7 @@ int main(int argc, char *argv[]) {
             atomic_store(&echo.rx.packet_ready, 0);
         }
 
-        time_t now = time(NULL);
+        now = time(NULL);
         if (now - last_stats >= 10) {
             last_stats = now;
             uint16_t tx_used = (echo.tx_rb->head - echo.tx_rb->tail) & BUFFER_MASK;
