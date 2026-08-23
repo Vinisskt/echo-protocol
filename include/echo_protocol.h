@@ -7,6 +7,9 @@
 #include "demod_afsk.h"
 #include "rohc.h"
 #include "scrambler.h"
+#include "arq.h"
+#include "delta.h"
+#include "mac.h"
 #include <stdatomic.h>
 
 #define SIZE_BUF 2048
@@ -59,6 +62,21 @@ typedef struct EchoProtocol_s {
     Scrambler tx_scrambler;
     Scrambler rx_scrambler;
     ProtocolStats stats;
+    
+    /* New modules */
+    ArqContext arq;
+    DeltaContext delta;
+    MacContext mac;
+    
+    /* Delta compression state for interactive shell */
+    uint8_t last_screen_state[DELTA_MAX_STATE_SIZE];
+    uint16_t last_screen_len;
+    bool screen_state_valid;
+    
+    /* Configuration */
+    bool use_delta_compression;
+    bool use_arq;
+    bool use_adaptive_mac;
 } EchoProtocol;
 
 int echo_init(EchoProtocol *echo, char *dev_name);
@@ -67,5 +85,11 @@ void tun_to_rb(EchoProtocol *echo);
 void rb_to_tun(EchoProtocol *echo, int *packet_len);
 void rb_to_audio(EchoProtocol *echo, uint8_t *symbol);
 void audio_to_rb(EchoProtocol *echo, float *sample);
+
+/* New API for delta/ARQ/MAC integration */
+int echo_send_packet(EchoProtocol *echo, const uint8_t *data, uint16_t len);
+int echo_recv_packet(EchoProtocol *echo, uint8_t *out, uint16_t max_len);
+void echo_update_mac(EchoProtocol *echo, uint32_t dt_us);
+void echo_process_arq_timeouts(EchoProtocol *echo);
 
 #endif

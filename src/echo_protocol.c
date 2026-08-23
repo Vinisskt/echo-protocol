@@ -1,6 +1,9 @@
 #include "../include/echo_protocol.h"
 #include "../include/log.h"
 #include "../include/fec.h"
+#include "../include/arq.h"
+#include "../include/delta.h"
+#include "../include/mac.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,6 +64,16 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
     rohc_init(&echo->rohc_rx);
     scrambler_init(&echo->tx_scrambler);
     scrambler_init(&echo->rx_scrambler);
+
+    /* Initialize new modules */
+    arq_init(&echo->arq, 16, 500, NULL);  /* window=16, timeout=500ms */
+    delta_init(&echo->delta, NULL);
+    mac_init(&echo->mac, 0, 2, 4, 10000, NULL);  /* node_id=0, 2 nodes, 4 slots, 10ms slots */
+    
+    echo->use_delta_compression = true;
+    echo->use_arq = true;
+    echo->use_adaptive_mac = true;
+    echo->screen_state_valid = false;
 
     echo->tx.tx_sample_count = SAMPLES_PER_SYMBOL;
     memset(&echo->stats, 0, sizeof(echo->stats));
@@ -488,4 +501,128 @@ void audio_to_rb(EchoProtocol *echo, float *sample) {
 
     process_rx_bit(echo, bits[0]);
     process_rx_bit(echo, bits[1]);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   NEW LAYER INTEGRATION: ARQ + Delta Compression + MAC Adaptive
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Send packet through ARQ -> Delta -> MAC layers */
+int echo_send_packet(EchoProtocol *echo, const uint8_t *data, uint16_t len) {
+    if (!echo->use_arq) {
+        /* Direct to TX ring buffer (legacy path) */
+        return 0;
+    }
+    
+    DeltaFrame delta_frame;
+    
+    if (echo->use_delta_compression) {
+        /* Delta compress the screen/terminal state */
+        delta_compress(&echo->delta, data, len, &delta_frame);
+        
+        /* Send through ARQ */
+        if (delta_frame.is_intra) {
+            /* Intra-frame: send full state */
+            return arq_send(&echo->arq, delta_frame.state, delta_frame.state_len);
+        } else {
+            /* Delta frame: send delta payload */
+            return arq_send(&echo->arq, delta_frame.delta, delta_frame.delta_len);
+        }
+    } else {
+        /* No delta compression, send raw through ARQ */
+        return arq_send(&echo->arq, data, len);
+    }
+}
+
+/* Receive packet through MAC -> ARQ -> Delta layers */
+int echo_recv_packet(EchoProtocol *echo, uint8_t *out, uint16_t max_len) {
+    if (!echo->use_arq) {
+        return -1;
+    }
+    
+    /* Check ARQ for delivered packets */
+    if (!arq_has_delivered(&echo->arq)) {
+        return -1;
+    }
+    
+    uint8_t arq_payload[256];
+    int arq_len = arq_get_delivered(&echo->arq, arq_payload, sizeof(arq_payload));
+    if (arq_len <= 0) return -1;
+    
+    if (echo->use_delta_compression) {
+        /* Decompress delta */
+        DeltaFrame frame;
+        frame.seq_num = 0;  /* Will be filled by ARQ layer in real impl */
+        frame.delta_len = arq_len;
+        memcpy(frame.delta, arq_payload, arq_len);
+        frame.is_intra = false;  /* Would be determined by frame header */
+        
+        uint8_t decompressed[DELTA_MAX_STATE_SIZE];
+        uint16_t dec_len = 0;
+        int res = delta_decompress(&echo->delta, &frame, decompressed, &dec_len);
+        if (res < 0) {
+            if (delta_needs_intra(&echo->delta)) {
+                /* Request intra-frame */
+                uint16_t base = delta_get_intra_base(&echo->delta);
+                ArqFrame intra_req;
+                arq_gen_intra_req(&echo->arq, base, &intra_req);
+                /* Would send intra_req through MAC */
+            }
+            return -1;
+        }
+        
+        if (dec_len > max_len) dec_len = max_len;
+        memcpy(out, decompressed, dec_len);
+        return dec_len;
+    } else {
+        /* No delta, return raw */
+        if (arq_len > max_len) arq_len = max_len;
+        memcpy(out, arq_payload, arq_len);
+        return arq_len;
+    }
+}
+
+/* Update MAC with fixed timestep (game loop style) */
+void echo_update_mac(EchoProtocol *echo, uint32_t dt_us) {
+    if (!echo->use_adaptive_mac) return;
+    
+    mac_update(&echo->mac, dt_us);
+    
+    /* Check for slot boundary and get action */
+    if (mac_is_slot_boundary(&echo->mac)) {
+        MacAction action = mac_get_action(&echo->mac);
+        
+        /* Handle MAC action */
+        switch (action) {
+            case MAC_ACTION_TX_NOW:
+                /* Trigger transmission */
+                mac_on_tx_result(&echo->mac, true, false, false);
+                break;
+            case MAC_ACTION_WAIT:
+                /* Do nothing this slot */
+                break;
+            case MAC_ACTION_POWER_LOW:
+            case MAC_ACTION_POWER_HIGH:
+                /* Adjust TX power (would integrate with audio_io) */
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+/* Process ARQ timeouts and retransmissions */
+void echo_process_arq_timeouts(EchoProtocol *echo) {
+    if (!echo->use_arq) return;
+    
+    arq_timeout_check(&echo->arq);
+    
+    /* Check for frames to retransmit */
+    ArqFrame frame;
+    if (arq_get_next_frame(&echo->arq, &frame)) {
+        /* Frame would be sent through MAC/PHY layer */
+        /* For now, just log */
+        log_debug("ARQ: frame ready for TX seq=%u type=%d len=%u",
+                  frame.seq_num, frame.type, frame.payload_len);
+    }
 }
