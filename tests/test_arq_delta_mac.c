@@ -335,12 +335,13 @@ void test_delta_gap_detection() {
 void test_mac_init() {
     TEST("mac_init initializes context");
     MacContext ctx;
-    mac_init(&ctx, 0, 2, 4, 10000, test_get_time_us);
+    mac_init(&ctx, 0, 2, 4, 10000, 3000, test_get_time_us);
     
     if (ctx.node_id != 0) { FAIL("node_id"); return; }
     if (ctx.num_nodes != 2) { FAIL("num_nodes"); return; }
     if (ctx.slot_count != 4) { FAIL("slot_count"); return; }
     if (ctx.slot_duration_us != 10000) { FAIL("slot_duration"); return; }
+    if (ctx.guard_time_us != 3000) { FAIL("guard_time"); return; }
     if (ctx.mode != MAC_MODE_HYBRID) { FAIL("default mode"); return; }
     if (ctx.alpha != 0.1f) { FAIL("alpha"); return; }
     if (ctx.gamma != 0.9f) { FAIL("gamma"); return; }
@@ -353,7 +354,7 @@ void test_mac_init() {
 void test_mac_fixed_tdma() {
     TEST("MAC_MODE_FIXED_TDMA respects slot assignment");
     MacContext ctx;
-    mac_init(&ctx, 1, 4, 4, 10000, test_get_time_us);
+    mac_init(&ctx, 1, 4, 4, 10000, 3000, test_get_time_us);
     mac_set_mode(&ctx, MAC_MODE_FIXED_TDMA);
     
     ctx.last_state = MAC_STATE_QUEUED;
@@ -374,7 +375,7 @@ void test_mac_fixed_tdma() {
 void test_mac_q_learning() {
     TEST("Q-learning updates Q-values correctly");
     MacContext ctx;
-    mac_init(&ctx, 0, 2, 4, 10000, test_get_time_us);
+    mac_init(&ctx, 0, 2, 4, 10000, 3000, test_get_time_us);
     mac_set_mode(&ctx, MAC_MODE_Q_LEARNING);
     
     ctx.last_state = MAC_STATE_QUEUED;
@@ -403,7 +404,7 @@ void test_mac_q_learning() {
 void test_mac_behavior_tree() {
     TEST("Behavior tree executes correctly");
     MacContext ctx;
-    mac_init(&ctx, 0, 2, 4, 10000, test_get_time_us);
+    mac_init(&ctx, 0, 2, 4, 10000, 3000, test_get_time_us);
     mac_set_mode(&ctx, MAC_MODE_BEHAVIOR_TREE);
     
     ctx.last_state = MAC_STATE_QUEUED;
@@ -423,7 +424,7 @@ void test_mac_behavior_tree() {
 void test_mac_fixed_timestep() {
     TEST("Fixed timestep accumulator advances slots correctly");
     MacContext ctx;
-    mac_init(&ctx, 0, 2, 4, 10000, test_get_time_us);
+    mac_init(&ctx, 0, 2, 4, 10000, 3000, test_get_time_us);
     
     ctx.current_slot = 0;
     ctx.accumulator_us = 0;
@@ -450,7 +451,7 @@ void test_mac_fixed_timestep() {
 void test_mac_conditions() {
     TEST("MAC behavior tree conditions work (via BT execution)");
     MacContext ctx;
-    mac_init(&ctx, 0, 2, 4, 10000, test_get_time_us);
+    mac_init(&ctx, 0, 2, 4, 10000, 3000, test_get_time_us);
     mac_set_mode(&ctx, MAC_MODE_BEHAVIOR_TREE);
     
     /* Test behavior tree execution for different states */
@@ -515,7 +516,7 @@ void test_echo_protocol_integration() {
     /* Initialize new modules */
     arq_init(&echo.arq, 8, 500, test_get_time_ms);
     delta_init(&echo.delta, test_get_time_ms);
-    mac_init(&echo.mac, 0, 2, 4, 10000, test_get_time_us);
+    mac_init(&echo.mac, 0, 2, 4, 10000, 3000, test_get_time_us);
     echo.use_delta_compression = true;
     echo.use_arq = true;
     echo.use_adaptive_mac = true;
@@ -546,7 +547,7 @@ void test_arq_delta_mac_workflow() {
     arq_init(&arq_rx, 8, 500, test_get_time_ms);
     delta_init(&delta_tx, test_get_time_ms);
     delta_init(&delta_rx, test_get_time_ms);
-    mac_init(&mac, 0, 2, 4, 10000, test_get_time_us);
+    mac_init(&mac, 0, 2, 4, 10000, 3000, test_get_time_us);
     mac_set_mode(&mac, MAC_MODE_BEHAVIOR_TREE);
     
     /* Simulate terminal screen state updates */

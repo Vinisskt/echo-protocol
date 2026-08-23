@@ -68,7 +68,7 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
     /* Initialize new modules */
     arq_init(&echo->arq, 16, 500, NULL);  /* window=16, timeout=500ms */
     delta_init(&echo->delta, NULL);
-    mac_init(&echo->mac, 0, 2, 4, 10000, NULL);  /* node_id=0, 2 nodes, 4 slots, 10ms slots */
+    mac_init(&echo->mac, 0, 2, 4, 10000, 3000, NULL);  /* node_id=0, 2 nodes, 4 slots, 10ms slots, 3ms guard */
     
     echo->use_delta_compression = true;
     echo->use_arq = true;

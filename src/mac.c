@@ -13,6 +13,7 @@ static uint32_t default_get_time_us(void) {
 
 void mac_init(MacContext *ctx, uint8_t node_id, uint8_t num_nodes,
               uint8_t slot_count, uint32_t slot_duration_us,
+              uint32_t guard_time_us,
               uint32_t (*get_time_us)(void)) {
     memset(ctx, 0, sizeof(MacContext));
     
@@ -20,6 +21,7 @@ void mac_init(MacContext *ctx, uint8_t node_id, uint8_t num_nodes,
     ctx->num_nodes = num_nodes > MAC_MAX_NODES ? MAC_MAX_NODES : num_nodes;
     ctx->slot_count = slot_count > 0 ? slot_count : 1;
     ctx->slot_duration_us = slot_duration_us > 0 ? slot_duration_us : 10000;
+    ctx->guard_time_us = guard_time_us > slot_duration_us ? slot_duration_us / 2 : guard_time_us;
     ctx->fixed_dt_us = ctx->slot_duration_us;
     
     ctx->get_time_us = get_time_us ? get_time_us : default_get_time_us;
@@ -105,6 +107,11 @@ void mac_on_queue_change(MacContext *ctx, bool has_data) {
 }
 
 MacAction mac_get_action(MacContext *ctx) {
+    /* Guard time: no TX allowed during guard period at end of slot */
+    if (mac_is_in_guard_time(ctx)) {
+        return MAC_ACTION_WAIT;
+    }
+    
     MacState state = ctx->last_state;
     
     /* Determine state based on current conditions */
@@ -434,4 +441,37 @@ uint8_t mac_get_current_slot(const MacContext *ctx) {
 uint32_t mac_time_to_next_slot(const MacContext *ctx) {
     if (ctx->accumulator_us >= ctx->fixed_dt_us) return 0;
     return ctx->fixed_dt_us - ctx->accumulator_us;
+}
+
+/* Guard time helpers */
+bool mac_is_in_guard_time(const MacContext *ctx) {
+    if (ctx->guard_time_us == 0) return false;
+    /* Guard time is at the END of each slot */
+    uint32_t slot_progress = ctx->accumulator_us;
+    uint32_t guard_start = ctx->slot_duration_us - ctx->guard_time_us;
+    return slot_progress >= guard_start;
+}
+
+bool mac_is_transmit_window(const MacContext *ctx) {
+    if (ctx->guard_time_us == 0) return true;
+    /* Transmit window is slot_duration - guard_time at the START of slot */
+    uint32_t slot_progress = ctx->accumulator_us;
+    uint32_t tx_window_end = ctx->slot_duration_us - ctx->guard_time_us;
+    return slot_progress < tx_window_end;
+}
+
+uint32_t mac_get_guard_time_remaining(const MacContext *ctx) {
+    if (ctx->guard_time_us == 0) return 0;
+    uint32_t slot_progress = ctx->accumulator_us;
+    uint32_t guard_start = ctx->slot_duration_us - ctx->guard_time_us;
+    if (slot_progress < guard_start) return 0;
+    return ctx->slot_duration_us - slot_progress;
+}
+
+uint32_t mac_get_tx_window_remaining(const MacContext *ctx) {
+    if (ctx->guard_time_us == 0) return ctx->slot_duration_us - ctx->accumulator_us;
+    uint32_t slot_progress = ctx->accumulator_us;
+    uint32_t tx_window_end = ctx->slot_duration_us - ctx->guard_time_us;
+    if (slot_progress >= tx_window_end) return 0;
+    return tx_window_end - slot_progress;
 }

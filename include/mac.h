@@ -78,6 +78,7 @@ typedef struct {
     uint8_t slot_count;        /* TDMA slots per frame */
     uint8_t current_slot;
     uint32_t slot_duration_us;
+    uint32_t guard_time_us;    /* Guard time between slots (propagation delay) */
     uint32_t frame_start_time;
     
     /* Q-learning */
@@ -110,6 +111,7 @@ typedef struct {
 /* Initialize MAC */
 void mac_init(MacContext *ctx, uint8_t node_id, uint8_t num_nodes, 
               uint8_t slot_count, uint32_t slot_duration_us,
+              uint32_t guard_time_us,
               uint32_t (*get_time_us)(void));
 
 /* Set mode */
@@ -160,5 +162,11 @@ void mac_reset_stats(MacContext *ctx);
 bool mac_is_slot_boundary(const MacContext *ctx);
 uint8_t mac_get_current_slot(const MacContext *ctx);
 uint32_t mac_time_to_next_slot(const MacContext *ctx);
+
+/* Guard time helpers */
+bool mac_is_in_guard_time(const MacContext *ctx);          /* True if in guard period (no TX allowed) */
+bool mac_is_transmit_window(const MacContext *ctx);       /* True if in TX window (slot - guard_time) */
+uint32_t mac_get_guard_time_remaining(const MacContext *ctx);  /* µs until guard time ends */
+uint32_t mac_get_tx_window_remaining(const MacContext *ctx);   /* µs until slot ends */
 
 #endif
