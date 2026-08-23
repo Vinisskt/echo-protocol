@@ -8,7 +8,7 @@
 #define FREQ_01       3000
 #define FREQ_10       4000
 #define FREQ_11       5000
-#define SYMBOL_RATE   1500
+#define SYMBOL_RATE   2400
 #define SAMPLES_PER_SYMBOL (SAMPLE_RATE / SYMBOL_RATE)
 
 #ifndef SAMPLE_RATE
