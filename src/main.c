@@ -145,9 +145,9 @@ int main(int argc, char *argv[]) {
     time_t last_stats = time(NULL);
     time_t last_tx_time = time(NULL);
 
-    #define KEEPALIVE_INTERVAL 1  /* segundos sem TX → envia keepalive */
+    #define KEEPALIVE_INTERVAL 5  /* segundos sem TX → envia keepalive */
     #define KEEPALIVE_SIZE     20 /* IP header mínimo */
-    #define IDLE_THRESHOLD     2  /* segundos → preamble estendido */
+    #define IDLE_THRESHOLD     3  /* segundos → preamble estendido */
     #define PREAMBLE_NORMAL    1  /* 1x preamble (16 bits) */
     #define PREAMBLE_EXTENDED  4  /* 4x preamble (64 bits) — dá tempo ao AGC assentar */
 
