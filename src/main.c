@@ -70,9 +70,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    log_info("configurando interface %s (IP: %s, MTU: 256)", dev_name, ip_addr);
+    log_info("configurando interface %s (IP: %s, MTU: 640)", dev_name, ip_addr);
     tun_set_ip(dev_name, ip_addr);
-    tun_set_mtu(dev_name, 256);
+    tun_set_mtu(dev_name, 640);
     tun_set_up(dev_name);
 
     log_info("inicializando PortAudio");
