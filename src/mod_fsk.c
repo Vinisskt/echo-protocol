@@ -4,25 +4,26 @@
 #define SIZE_PREAMBLE (16 - 1)
 #define SIZE_SYNC_WORD (32 - 1)
 
-void push_preamble(Buffer *buf) {
-    uint8_t bit;
-    for (int i = SIZE_PREAMBLE; i >= 0; i--) {
-        bit = (PREAMBLE >> i) & 1;
+/* Push the nbits MSB-first bits of value into the lock-free bit buffer. */
+static void push_bits(Buffer *buf, uint32_t value, int nbits) {
+    for (int i = nbits - 1; i >= 0; i--) {
+        uint8_t bit = (value >> i) & 1;
         put_bits(buf, &bit);
     }
+}
+
+void push_preamble(Buffer *buf) {
+    push_bits(buf, PREAMBLE, SIZE_PREAMBLE + 1);
 }
 
 void push_preamble_n(Buffer *buf, int count) {
-    for (int i = 0; i < count; i++)
+    for (int i = 0; i < count; i++) {
         push_preamble(buf);
+    }
 }
 
 void push_sync_word(Buffer *buf) {
-    uint8_t bit;
-    for (int i = SIZE_SYNC_WORD; i >= 0; i--) {
-        bit = (SYNC_WORD >> i) & 1;
-        put_bits(buf, &bit);
-    }
+    push_bits(buf, SYNC_WORD, SIZE_SYNC_WORD + 1);
 }
 
 void pre_calc_fsk(StateFSK *state) {

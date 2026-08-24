@@ -249,96 +249,72 @@ void bt_add_child(BtNode *parent, BtNode *child) {
     }
 }
 
-MacAction bt_execute(BtNode *root, void *ctx) {
+/* Optional trace hook used by the debug evaluator to visualize the tree.
+   is_result==false prints the node header; is_result==true prints only the
+   CONDITION RESULT line for a previously-printed condition node. */
+typedef void (*bt_trace_fn)(const BtNode *node, int depth, bool is_result, bool cond_result);
+
+static void bt_trace_print(const BtNode *node, int depth, bool is_result, bool cond_result) {
+    static const char *type_names[] = {"SEQUENCE", "SELECTOR", "ACTION", "CONDITION"};
+    if (depth >= 5) return;
+    if (is_result) {
+        for (int i = 0; i < depth; i++) printf("  ");
+        printf("  CONDITION RESULT: %s\n", cond_result ? "TRUE" : "FALSE");
+        return;
+    }
+    for (int i = 0; i < depth; i++) printf("  ");
+    printf("%s", type_names[node->type]);
+    if (node->type == BT_NODE_ACTION) printf("(%d)", node->action);
+    if (node->type == BT_NODE_CONDITION) printf("(cond)");
+    printf("\n");
+}
+
+/* Single source of truth for behavior-tree evaluation. The trace callback is
+   invoked on each visited node (NULL for the production, silent evaluator). */
+static MacAction bt_traverse(BtNode *root, void *ctx, int depth, bt_trace_fn trace) {
     if (!root) return MAC_ACTION_WAIT;
-    
-    const char *type_names[] = {"SEQUENCE", "SELECTOR", "ACTION", "CONDITION"};
-    
+    if (trace) trace(root, depth, false, false);
+
     switch (root->type) {
         case BT_NODE_SEQUENCE: {
             MacAction last_result = MAC_ACTION_WAIT;
             for (int i = 0; i < root->child_count; i++) {
-                MacAction result = bt_execute(root->children[i], ctx);
+                MacAction result = bt_traverse(root->children[i], ctx, depth + 1, trace);
                 if (result == MAC_ACTION_WAIT) return MAC_ACTION_WAIT;
                 last_result = result;
             }
             return last_result;
         }
-            
+
         case BT_NODE_SELECTOR: {
             for (int i = 0; i < root->child_count; i++) {
-                MacAction result = bt_execute(root->children[i], ctx);
+                MacAction result = bt_traverse(root->children[i], ctx, depth + 1, trace);
                 if (result != MAC_ACTION_WAIT) {
                     return result;
                 }
             }
             return MAC_ACTION_WAIT;
         }
-            
+
         case BT_NODE_ACTION:
             return root->action;
-            
+
         case BT_NODE_CONDITION: {
             bool cond_result = root->condition ? root->condition(ctx) : false;
-            if (cond_result) {
-                return MAC_ACTION_TX_NOW;
-            }
-            return MAC_ACTION_WAIT;
+            if (trace) trace(root, depth, true, cond_result);
+            return cond_result ? MAC_ACTION_TX_NOW : MAC_ACTION_WAIT;
         }
     }
     return MAC_ACTION_WAIT;
 }
 
-/* Debug version for testing */
+MacAction bt_execute(BtNode *root, void *ctx) {
+    return bt_traverse(root, ctx, 0, NULL);
+}
+
+/* Debug version for testing/visualization */
 MacAction bt_execute_debug(BtNode *root, void *ctx, int depth) {
-    if (!root) return MAC_ACTION_WAIT;
-    
-    const char *type_names[] = {"SEQUENCE", "SELECTOR", "ACTION", "CONDITION"};
-    if (depth < 5) {
-        for (int i = 0; i < depth; i++) printf("  ");
-        printf("%s", type_names[root->type]);
-        if (root->type == BT_NODE_ACTION) printf("(%d)", root->action);
-        if (root->type == BT_NODE_CONDITION) printf("(cond)");
-        printf("\n");
-    }
-    
-    switch (root->type) {
-        case BT_NODE_SEQUENCE: {
-            MacAction last_result = MAC_ACTION_WAIT;
-            for (int i = 0; i < root->child_count; i++) {
-                MacAction result = bt_execute_debug(root->children[i], ctx, depth + 1);
-                if (result == MAC_ACTION_WAIT) return MAC_ACTION_WAIT;
-                last_result = result;
-            }
-            return last_result;
-        }
-            
-        case BT_NODE_SELECTOR: {
-            for (int i = 0; i < root->child_count; i++) {
-                MacAction result = bt_execute_debug(root->children[i], ctx, depth + 1);
-                if (result != MAC_ACTION_WAIT) {
-                    return result;
-                }
-            }
-            return MAC_ACTION_WAIT;
-        }
-            
-        case BT_NODE_ACTION:
-            return root->action;
-            
-        case BT_NODE_CONDITION: {
-            bool cond_result = root->condition ? root->condition(ctx) : false;
-            if (depth < 5) {
-                for (int i = 0; i < depth; i++) printf("  ");
-                printf("  CONDITION RESULT: %s\n", cond_result ? "TRUE" : "FALSE");
-            }
-            if (cond_result) {
-                return MAC_ACTION_TX_NOW;
-            }
-            return MAC_ACTION_WAIT;
-        }
-    }
-    return MAC_ACTION_WAIT;
+    return bt_traverse(root, ctx, depth, bt_trace_print);
 }
 
 /* Conditions for behavior tree */

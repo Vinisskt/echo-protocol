@@ -2,6 +2,12 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* Write the original data length as a 2-byte big-endian prefix. */
+static void fec_write_len_prefix(uint8_t *out, int data_len) {
+    out[0] = (uint8_t)((data_len >> 8) & 0xFF);
+    out[1] = (uint8_t)(data_len & 0xFF);
+}
+
 /* Reed-Solomon sobre GF(2^8), polinomio primitivo 0x11D (o do ggwave).
    Codigo sistematico: k bytes de dados + ecc bytes de paridade; corrige ate
    t = ecc/2 erros de simbolo (byte). Decodificador classico: sindromes,
@@ -238,12 +244,8 @@ int fec_encode(const uint8_t *data, int data_len, uint8_t *out, int out_cap) {
     int ecc = fec_ecc_bytes(data_len);
     
     /* Prefix original data_len (2 bytes, big-endian) */
-    if (data_len + 2 + ecc > out_cap && data_len + ecc <= FEC_RS_MAX_N) return -1;
-    if (data_len + 2 + ecc > out_cap && data_len + ecc > FEC_RS_MAX_N) return -1;
-    
-    out[0] = (data_len >> 8) & 0xFF;
-    out[1] = data_len & 0xFF;
-    
+    fec_write_len_prefix(out, data_len);
+
     if (data_len + ecc <= FEC_RS_MAX_N) {
         if (data_len + 2 + ecc > out_cap) return -1;
         int ret = rs_encode_block(data, data_len, ecc, out + 2);
@@ -255,9 +257,8 @@ int fec_encode(const uint8_t *data, int data_len, uint8_t *out, int out_cap) {
     int block_size = FEC_RS_MAX_N;
     if (nblocks * block_size + 2 > out_cap) return -1;
     
-    out[0] = (data_len >> 8) & 0xFF;
-    out[1] = data_len & 0xFF;
-    
+    fec_write_len_prefix(out, data_len);
+
     uint8_t *blocks = malloc((size_t)nblocks * (size_t)block_size);
     if (blocks == NULL) return -1;
     

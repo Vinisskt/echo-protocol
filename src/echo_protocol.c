@@ -19,6 +19,9 @@
 static void     rx_reset(EchoProtocol *echo);
 static uint8_t  is_valid_header(uint16_t header);
 static uint8_t  is_valid_fec_len(uint16_t len);
+static void     rx_decode_header(uint16_t header, uint8_t *comp, uint8_t *rohc,
+                                 uint8_t *fec, uint16_t *len);
+static int      tx_push_bit(EchoProtocol *echo, uint8_t bit, const char *where);
 
 /* ── TX helpers ─────────────────────────────────────────────────────── */
 static int      tx_compress(const uint8_t *raw, int raw_len,
@@ -138,16 +141,21 @@ static int tx_encode_fec(const uint8_t *data, uint16_t data_len,
     return 0;
 }
 
+static int tx_push_bit(EchoProtocol *echo, uint8_t bit, const char *where) {
+    bit = scrambler_process(&echo->tx_scrambler, bit);
+    if (!put_bits(echo->tx_rb, &bit)) {
+        log_warn("TX buffer full during %s", where);
+        return -1;
+    }
+    return 0;
+}
+
 static int tx_push_header(EchoProtocol *echo, uint16_t header) {
     scrambler_reset(&echo->tx_scrambler);
 
     for (int i = HEADER_BITS - 1; i >= 0; i--) {
-        uint8_t bit = (header >> i) & 1;
-        bit = scrambler_process(&echo->tx_scrambler, bit);
-        if (!put_bits(echo->tx_rb, &bit)) {
-            log_warn("TX buffer full during header");
+        if (tx_push_bit(echo, (header >> i) & 1, "header") < 0)
             return -1;
-        }
     }
     return 0;
 }
@@ -156,11 +164,8 @@ static int tx_push_payload(EchoProtocol *echo, const uint8_t *data, uint16_t len
     int total_bits = len * SIZE_BYTE;
     for (int i = 0; i < total_bits; i++) {
         uint8_t bit = (data[i >> 3] >> (7 - (i & 7))) & 1;
-        bit = scrambler_process(&echo->tx_scrambler, bit);
-        if (!put_bits(echo->tx_rb, &bit)) {
-            log_warn("TX buffer full during payload");
+        if (tx_push_bit(echo, bit, "payload") < 0)
             return -1;
-        }
     }
     return 0;
 }
@@ -227,10 +232,8 @@ static int rx_read_header(EchoProtocol *echo, uint16_t *header) {
     }
 
     *header = (uint16_t)(acc & 0xFFFF);
-    echo->rx.is_compressed = (*header >> 15) & 1;
-    echo->rx.is_rohc      = (*header >> 14) & 1;
-    echo->rx.is_fec       = (*header >> 13) & 1;
-    echo->rx.packet_len   = *header & 0x1FFF;
+    rx_decode_header(*header, &echo->rx.is_compressed, &echo->rx.is_rohc,
+                     &echo->rx.is_fec, &echo->rx.packet_len);
 
     if (!is_valid_header(*header)) {
         log_warn("RX invalid header=0x%04X (comp=%u rohc=%u fec=%u len=%u)",
@@ -401,11 +404,18 @@ static uint8_t is_valid_fec_len(uint16_t len) {
     return 0;
 }
 
+static void rx_decode_header(uint16_t header, uint8_t *comp, uint8_t *rohc,
+                             uint8_t *fec, uint16_t *len) {
+    *comp = (header >> 15) & 1;
+    *rohc = (header >> 14) & 1;
+    *fec  = (header >> 13) & 1;
+    *len  = header & 0x1FFF;
+}
+
 static uint8_t is_valid_header(uint16_t header) {
-    uint8_t comp = (header >> 15) & 1;
-    uint8_t rohc = (header >> 14) & 1;
-    uint8_t fec  = (header >> 13) & 1;
-    uint16_t len = header & 0x1FFF;
+    uint8_t comp, rohc, fec;
+    uint16_t len;
+    rx_decode_header(header, &comp, &rohc, &fec, &len);
 
     if (comp && rohc) return 0;
     if (len == 0 || len > SIZE_BUF) return 0;
@@ -448,10 +458,8 @@ static void handle_data(EchoProtocol *echo, uint8_t bit, time_t now) {
     if (echo->rx.bits_received != 16) return;
 
     uint16_t header = (uint16_t)(echo->rx.header_accumulator & 0xFFFF);
-    echo->rx.is_compressed = (header >> 15) & 1;
-    echo->rx.is_rohc = (header >> 14) & 1;
-    echo->rx.is_fec = (header >> 13) & 1;
-    echo->rx.packet_len = header & 0x1FFF;
+    rx_decode_header(header, &echo->rx.is_compressed, &echo->rx.is_rohc,
+                     &echo->rx.is_fec, &echo->rx.packet_len);
 
     if (!is_valid_header(header)) {
         log_warn("RX invalid header=0x%04X (comp=%u rohc=%u fec=%u len=%u) -> back to SEARCHING",

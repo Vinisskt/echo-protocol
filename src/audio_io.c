@@ -31,13 +31,8 @@ static int paCallback(const void *inputBuffer, void *outputBuffer,
     }
     audio->agc_freeze = (tx_active || tx_active_frames > 0);
 
-    /* Handle ALSA xrun/underrun */
-    if (statusFlags & paInputOverflow) {
-        /* Input overflow - data lost, but continue */
-    }
-    if (statusFlags & paOutputUnderflow) {
-        /* Output underrun - silence inserted, but continue */
-    }
+    /* ALSA xrun/underrun (input overflow / output underflow) are tolerated:
+       the callback keeps running and the link-layer FEC/ARQ recover the loss. */
 
     for (unsigned int i = 0; i < framesPerBuffer; i++) {
         if (in) {

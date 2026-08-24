@@ -13,6 +13,22 @@ static uint8_t crc8(const uint8_t *data, int len) {
     return crc;
 }
 
+/* Store a packet header as the static compression context. */
+static void rohc_store_context(ROHCState *state, const uint8_t *packet, int len) {
+    int copy = len < ROHC_CTX_SIZE ? len : ROHC_CTX_SIZE;
+    memcpy(state->context, packet, copy);
+    state->context_valid = 1;
+}
+
+/* Compute the CRC over a compressed header with the CRC byte (index 2) zeroed,
+   matching how it was calculated during compression. */
+static uint8_t rohc_compute_header_crc(const uint8_t *compressed, int header_len) {
+    uint8_t header_copy[32];
+    memcpy(header_copy, compressed, header_len);
+    header_copy[2] = 0;
+    return crc8(header_copy, header_len);
+}
+
 void rohc_init(ROHCState *state) {
     memset(state->context, 0, sizeof(state->context));
     state->context_valid = 0;
@@ -20,8 +36,16 @@ void rohc_init(ROHCState *state) {
 
 uint16_t ip_checksum(const uint8_t *header, int len) {
     uint32_t sum = 0;
-    for (int i = 0; i < len; i += 2) {
+    int i = 0;
+    for (; i + 1 < len; i += 2) {
         sum += (header[i] << 8) | header[i + 1];
+        if (sum & 0xFFFF0000) {
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+    }
+    if (i < len) {
+        /* Odd trailing byte: pad with zero (RFC 1071) instead of reading past the buffer. */
+        sum += (header[i] << 8);
         if (sum & 0xFFFF0000) {
             sum = (sum & 0xFFFF) + (sum >> 16);
         }
@@ -36,9 +60,7 @@ static int compress_ipv4(ROHCState *state, const uint8_t *packet, int packet_len
     if (ihl < 20 || packet_len < ihl) return -2;
 
     if (!state->context_valid) {
-        int copy = ihl < ROHC_CTX_SIZE ? ihl : ROHC_CTX_SIZE;
-        memcpy(state->context, packet, copy);
-        state->context_valid = 1;
+        rohc_store_context(state, packet, ihl);
         return 0;
     }
 
@@ -47,14 +69,12 @@ static int compress_ipv4(ROHCState *state, const uint8_t *packet, int packet_len
     if ((packet[0] & 0xF0) != (ctx[0] & 0xF0) ||
         packet[9] != ctx[9] ||
         memcmp(packet + 12, ctx + 12, 8) != 0) {
-        int copy = ihl < ROHC_CTX_SIZE ? ihl : ROHC_CTX_SIZE;
-        memcpy(ctx, packet, copy);
+        rohc_store_context(state, packet, ihl);
         return 0;
     }
 
     if ((packet[0] & 0x0F) != (ctx[0] & 0x0F)) {
-        int copy = ihl < ROHC_CTX_SIZE ? ihl : ROHC_CTX_SIZE;
-        memcpy(ctx, packet, copy);
+        rohc_store_context(state, packet, ihl);
         return 0;
     }
 
@@ -192,23 +212,17 @@ int rohc_decompress(ROHCState *state, const uint8_t *compressed, int comp_len, u
         return -1;
     }
 
-    // Validate CRC first (byte 2 is CRC, covers header with CRC byte zeroed)
-    uint8_t received_crc = compressed[2];
+    // Validate CRC first (byte 2 is CRC; header with CRC byte zeroed)
     uint8_t flags = compressed[1];
     int header_len = 3 + 2;  // version + flags + crc + ip_id
     if (flags & ROHC_FLAG_TOS) header_len += 1;
     if (flags & ROHC_FLAG_FLAGS) header_len += 2;
     if (flags & ROHC_FLAG_TTL) header_len += 1;
 
-    // Calculate CRC over header with CRC byte zeroed (as during compression)
-    uint8_t header_copy[32];
-    if (header_len > (int)sizeof(header_copy)) return -1;
-    memcpy(header_copy, compressed, header_len);
-    header_copy[2] = 0;  // zero the CRC byte
-    uint8_t calc_crc = crc8(header_copy, header_len);
-    
-    if (received_crc != calc_crc) {
-        fprintf(stderr, "[ROHC] CRC mismatch: got 0x%02X expected 0x%02X\n", received_crc, calc_crc);
+    if (header_len > 32) return -1;
+    uint8_t calc_crc = rohc_compute_header_crc(compressed, header_len);
+    if (compressed[2] != calc_crc) {
+        fprintf(stderr, "[ROHC] CRC mismatch: got 0x%02X expected 0x%02X\n", compressed[2], calc_crc);
         return -1;
     }
 
@@ -289,15 +303,10 @@ static int rohc_decompress_ipv6(ROHCState *state, const uint8_t *compressed, int
     if (flags & ROHC_V6_FLAG_HOP_LIMIT) header_len += 1;
     if (flags & ROHC_V6_FLAG_TC) header_len += 1;
 
-    uint8_t received_crc = compressed[2];
-    // Calculate CRC over header with CRC byte zeroed
-    uint8_t header_copy[32];
-    if (header_len > (int)sizeof(header_copy)) return -1;
-    memcpy(header_copy, compressed, header_len);
-    header_copy[2] = 0;
-    uint8_t calc_crc = crc8(header_copy, header_len);
-    if (received_crc != calc_crc) {
-        fprintf(stderr, "[ROHC] IPv6 CRC mismatch: got 0x%02X expected 0x%02X\n", received_crc, calc_crc);
+    if (header_len > 32) return -1;
+    uint8_t calc_crc = rohc_compute_header_crc(compressed, header_len);
+    if (compressed[2] != calc_crc) {
+        fprintf(stderr, "[ROHC] IPv6 CRC mismatch: got 0x%02X expected 0x%02X\n", compressed[2], calc_crc);
         return -1;
     }
 

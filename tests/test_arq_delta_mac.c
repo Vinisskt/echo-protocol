@@ -124,6 +124,34 @@ void test_arq_retransmit_timeout() {
     PASS();
 }
 
+void test_arq_stale_ack_ignored() {
+    TEST("arq_handle_ack ignores stale/out-of-window ACK");
+    ArqContext ctx;
+    arq_init(&ctx, 4, 500, test_get_time_ms);
+
+    /* Simulate an in-flight window: base=5, next=7 (mod = window*2 = 8) */
+    ctx.window_size = 4;
+    ctx.sender.snd_base = 5;
+    ctx.sender.snd_next = 7;
+
+    /* A stale ACK (ack_num=2, behind the current base) must be ignored.
+       Without the guard it would wrap snd_base forward and corrupt the window. */
+    arq_handle_ack(&ctx, 2);
+    if (ctx.sender.snd_base != 5) {
+        FAIL("stale ACK corrupted window: snd_base=%d expected 5", ctx.sender.snd_base);
+        return;
+    }
+
+    /* A valid ACK (ack_num=7) still advances the window. */
+    arq_handle_ack(&ctx, 7);
+    if (ctx.sender.snd_base != 7) {
+        FAIL("valid ACK did not advance window: snd_base=%d expected 7", ctx.sender.snd_base);
+        return;
+    }
+
+    PASS();
+}
+
 void test_arq_nak() {
     TEST("arq_handle_nak triggers fast retransmit");
     ArqContext ctx;
@@ -221,6 +249,34 @@ void test_delta_init() {
     if (ctx.compressor.next_seq != 1) { FAIL("next_seq not 1"); return; }
     if (ctx.compressor.acked_base != 1) { FAIL("acked_base not 1"); return; }
     if (ctx.decompressor.expected_seq != 1) { FAIL("expected_seq not 1"); return; }
+    PASS();
+}
+
+void test_delta_stale_ack_ignored() {
+    TEST("delta_handle_ack ignores stale/out-of-window ACK");
+    DeltaContext ctx;
+    delta_init(&ctx, test_get_time_ms);
+
+    /* Simulate an in-flight compressor window: base=5, next=7. */
+    ctx.compressor.acked_base = 5;
+    ctx.compressor.next_seq = 7;
+
+    /* A stale ACK (seq=2, behind the current base) must be ignored.
+       Without the guard it would wrap acked_base forward and corrupt the
+       base used to build future deltas. */
+    delta_handle_ack(&ctx, 2);
+    if (ctx.compressor.acked_base != 5) {
+        FAIL("stale ACK corrupted base: acked_base=%d expected 5", ctx.compressor.acked_base);
+        return;
+    }
+
+    /* A valid ACK (seq=6) still advances the base. */
+    delta_handle_ack(&ctx, 6);
+    if (ctx.compressor.acked_base != 7) {
+        FAIL("valid ACK did not advance base: acked_base=%d expected 7", ctx.compressor.acked_base);
+        return;
+    }
+
     PASS();
 }
 
@@ -662,12 +718,14 @@ int main() {
     test_arq_sequence_math();
     test_arq_send_receive();
     test_arq_ack();
+    test_arq_stale_ack_ignored();
     test_arq_nak();
     test_arq_retransmit_timeout();
     test_arq_selective_repeat_window();
     
     printf("\n[Delta Compression (Mosh-style)]\n");
     test_delta_init();
+    test_delta_stale_ack_ignored();
     test_delta_compute_apply();
     test_delta_intra_frame();
     test_delta_decompress();

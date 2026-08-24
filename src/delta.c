@@ -204,20 +204,29 @@ bool delta_has_pending(const DeltaContext *ctx) {
     return ctx->compressor.next_seq != ctx->compressor.acked_base;
 }
 
+/* Forward distance in the 1..65535 sequence space (0 is reserved/invalid). */
+static uint16_t delta_seq_dist(uint16_t from, uint16_t to) {
+    int diff = (int)to - (int)from;
+    if (diff < 0) diff += 65535;
+    return (uint16_t)diff;
+}
+
 /* Handle ACK from receiver - advance base sequence */
 void delta_handle_ack(DeltaContext *ctx, uint16_t acked_seq) {
     DeltaCompressor *comp = &ctx->compressor;
-    
-    /* Advance acked_base to acked_seq + 1 */
-    while (comp->acked_base != (uint16_t)(acked_seq + 1)) {
-        uint16_t next = comp->acked_base + 1;
-        if (next == 0) next = 1;  /* Wrap around, skip 0 */
-        if (comp->acked_base == acked_seq) {
-            comp->acked_base = next;
-            break;
-        }
-        comp->acked_base = next;
+
+    /* Ignore stale/duplicate/corrupt ACKs: a valid ACK must reference a
+       sequence inside the compressor window [acked_base, next_seq). Otherwise
+       advancing the base would wrap the sequence space and corrupt the base
+       used to build future deltas. */
+    if (acked_seq == 0) return;
+    if (delta_seq_dist(comp->acked_base, acked_seq) >=
+        delta_seq_dist(comp->acked_base, comp->next_seq)) {
+        return;
     }
+
+    comp->acked_base = (uint16_t)(acked_seq + 1);
+    if (comp->acked_base == 0) comp->acked_base = 1;  /* Wrap around, skip 0 */
 }
 
 /* Handle intra-frame request from receiver */

@@ -61,6 +61,21 @@ static float linear_to_db(float linear) {
     return 20.0f * log10f(linear);
 }
 
+/* Move a linear gain by step_db, clamped to [min_db, max_db]. Pure math only. */
+static float agc_step_gain_db(float current_linear, float step_db,
+                              float min_db, float max_db) {
+    float cur_db = linear_to_db(current_linear);
+    float new_db = agc_clamp(cur_db + step_db, min_db, max_db);
+    return db_to_linear(new_db);
+}
+
+/* Exponential moving average of instantaneous power (RMS^2). */
+static void agc_update_power(AGCState *agc, float rms) {
+    float power = rms * rms;
+    if (agc->power_avg == 0.0f) agc->power_avg = power;
+    else agc->power_avg = (1.0f - agc->alpha) * agc->power_avg + agc->alpha * power;
+}
+
 void agc_set_initial_gains(AudioState *audio, float tx_gain, float rx_gain) {
     audio->tx_gain = tx_gain;
     audio->rx_gain = rx_gain;
@@ -98,10 +113,7 @@ static void agc_calibrate(AGCState *agc, EchoProtocol *echo, AudioState *audio, 
 
     float rms = atomic_load(&audio->in_rms);
 
-    /* EMA da potência para detector */
-    float power = rms * rms;
-    if (agc->power_avg == 0.0f) agc->power_avg = power;
-    else agc->power_avg = (1.0f - agc->alpha) * agc->power_avg + agc->alpha * power;
+    agc_update_power(agc, rms);
 
     uint64_t d_sync = echo->stats.rx_sync_found - agc->last_rx_sync;
     uint64_t d_pkts = echo->stats.rx_packets - agc->last_rx_packets;
@@ -129,9 +141,9 @@ static void agc_calibrate(AGCState *agc, EchoProtocol *echo, AudioState *audio, 
     /* 1) CLIP no ADC: rms alto demais -> baixa RX gain imediatamente */
     if (rms > agc->rms_max && audio->rx_gain > db_to_linear(agc->rx_gain_db_min)) {
         float rx_db = linear_to_db(audio->rx_gain);
-        float new_rx_db = rx_db - 3.0f;  /* -3 dB step */
-        if (new_rx_db < agc->rx_gain_db_min) new_rx_db = agc->rx_gain_db_min;
-        float new_rx = db_to_linear(new_rx_db);
+        float new_rx = agc_step_gain_db(audio->rx_gain, -3.0f,
+                                        agc->rx_gain_db_min, agc->rx_gain_db_max);
+        float new_rx_db = linear_to_db(new_rx);
         agc_apply_gains(audio, audio->tx_gain, new_rx);
         log_warn("agc calib | clip detectado | rms=%.3f > %.3f | rx_gain %.2f->%.2f (%.1f->%.1f dB)",
                  rms, agc->rms_max, audio->rx_gain, new_rx, rx_db, new_rx_db);
@@ -144,9 +156,9 @@ static void agc_calibrate(AGCState *agc, EchoProtocol *echo, AudioState *audio, 
         agc->echo_streak++;
         if (agc->echo_streak >= agc->echo_sync_thresh && audio->tx_gain > db_to_linear(agc->tx_gain_db_min)) {
             float tx_db = linear_to_db(audio->tx_gain);
-            float new_tx_db = tx_db - 3.0f;
-            if (new_tx_db < agc->tx_gain_db_min) new_tx_db = agc->tx_gain_db_min;
-            float new_tx = db_to_linear(new_tx_db);
+            float new_tx = agc_step_gain_db(audio->tx_gain, -3.0f,
+                                            agc->tx_gain_db_min, agc->tx_gain_db_max);
+            float new_tx_db = linear_to_db(new_tx);
             agc_apply_gains(audio, new_tx, audio->rx_gain);
             log_warn("agc calib | auto-echo | streak=%d | tx_gain %.2f->%.2f (%.1f->%.1f dB)",
                      agc->echo_streak, audio->tx_gain, new_tx, tx_db, new_tx_db);
@@ -161,9 +173,9 @@ static void agc_calibrate(AGCState *agc, EchoProtocol *echo, AudioState *audio, 
     /* 3) Ruido excessivo sem sync: sinal fraco ou ganho alto demais -> ajusta */
     if (d_sync == 0 && rms > agc->rms_min && rms < agc->rms_max && audio->rx_gain > db_to_linear(agc->rx_gain_db_min)) {
         float rx_db = linear_to_db(audio->rx_gain);
-        float new_rx_db = rx_db - 1.5f;  /* -1.5 dB step */
-        if (new_rx_db < agc->rx_gain_db_min) new_rx_db = agc->rx_gain_db_min;
-        float new_rx = db_to_linear(new_rx_db);
+        float new_rx = agc_step_gain_db(audio->rx_gain, -1.5f,
+                                        agc->rx_gain_db_min, agc->rx_gain_db_max);
+        float new_rx_db = linear_to_db(new_rx);
         agc_apply_gains(audio, audio->tx_gain, new_rx);
         log_info("agc calib | ruído sem sync | rms=%.3f | rx_gain %.2f->%.2f (%.1f->%.1f dB)",
                  rms, audio->rx_gain, new_rx, rx_db, new_rx_db);
@@ -222,9 +234,7 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
     agc->last_rx_corrupted = echo->stats.rx_corrupted;
 
     float rms = atomic_load(&audio->in_rms);
-    float power = rms * rms;
-    if (agc->power_avg == 0.0f) agc->power_avg = power;
-    else agc->power_avg = (1.0f - agc->alpha) * agc->power_avg + agc->alpha * power;
+    agc_update_power(agc, rms);
 
     float power_db = 10.0f * log10f(agc->power_avg + 1e-12f);
     float error_db = agc->target_db - power_db;
@@ -324,9 +334,9 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
         agc->echo_streak = 0;
         if (audio->tx_gain > db_to_linear(agc->tx_gain_db_min)) {
             float tx_db = linear_to_db(audio->tx_gain);
-            float new_tx_db = tx_db - 3.0f;
-            if (new_tx_db < agc->tx_gain_db_min) new_tx_db = agc->tx_gain_db_min;
-            float new_tx = db_to_linear(new_tx_db);
+            float new_tx = agc_step_gain_db(audio->tx_gain, -3.0f,
+                                            agc->tx_gain_db_min, agc->tx_gain_db_max);
+            float new_tx_db = linear_to_db(new_tx);
             agc_apply_gains(audio, new_tx, audio->rx_gain);
             log_warn("agc steady | auto-eco | rms=%.3f | tx_gain %.2f->%.2f (%.1f->%.1f dB)",
                      rms, audio->tx_gain, new_tx, tx_db, new_tx_db);
@@ -335,9 +345,9 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
         }
         if (rms < agc->rms_min && audio->rx_gain < db_to_linear(agc->rx_gain_db_max)) {
             float rx_db = linear_to_db(audio->rx_gain);
-            float new_rx_db = rx_db + 3.0f;
-            if (new_rx_db > agc->rx_gain_db_max) new_rx_db = agc->rx_gain_db_max;
-            float new_rx = db_to_linear(new_rx_db);
+            float new_rx = agc_step_gain_db(audio->rx_gain, 3.0f,
+                                            agc->rx_gain_db_min, agc->rx_gain_db_max);
+            float new_rx_db = linear_to_db(new_rx);
             agc_apply_gains(audio, audio->tx_gain, new_rx);
             log_info("agc steady | sinal fraco (pos eco) | rms=%.3f | rx_gain %.2f->%.2f (%.1f->%.1f dB)",
                      rms, audio->rx_gain, new_rx, rx_db, new_rx_db);
@@ -349,9 +359,9 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
     /* 2) Clip no ADC -> baixa RX gain */
     if (rms > agc->rms_max && audio->rx_gain > db_to_linear(agc->rx_gain_db_min)) {
         float rx_db = linear_to_db(audio->rx_gain);
-        float new_rx_db = rx_db - 3.0f;
-        if (new_rx_db < agc->rx_gain_db_min) new_rx_db = agc->rx_gain_db_min;
-        float new_rx = db_to_linear(new_rx_db);
+        float new_rx = agc_step_gain_db(audio->rx_gain, -3.0f,
+                                        agc->rx_gain_db_min, agc->rx_gain_db_max);
+        float new_rx_db = linear_to_db(new_rx);
         agc_apply_gains(audio, audio->tx_gain, new_rx);
         log_warn("agc steady | clip | rms=%.3f | rx_gain %.2f->%.2f (%.1f->%.1f dB)",
                  rms, audio->rx_gain, new_rx, rx_db, new_rx_db);
@@ -362,9 +372,9 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
     /* 3) Laço proporcional em dB para manter RMS no target */
     if (fabsf(error_db) > 1.0f) {  /* só ajusta se erro > 1 dB */
         float rx_db = linear_to_db(audio->rx_gain);
-        float new_rx_db = rx_db + gain_db_step;
-        new_rx_db = agc_clamp(new_rx_db, agc->rx_gain_db_min, agc->rx_gain_db_max);
-        float new_rx = db_to_linear(new_rx_db);
+        float new_rx = agc_step_gain_db(audio->rx_gain, gain_db_step,
+                                        agc->rx_gain_db_min, agc->rx_gain_db_max);
+        float new_rx_db = linear_to_db(new_rx);
         if (new_rx != audio->rx_gain) {
             agc_apply_gains(audio, audio->tx_gain, new_rx);
             log_info("agc steady | loop dB | rms=%.3f (%.1f dB) | target=%.1f dB | err=%.1f dB | rx_gain %.2f->%.2f (%.1f->%.1f dB)",
@@ -378,9 +388,9 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
     if (d_sync == 0 && d_pkts == 0 && rms < agc->rms_min) {
         if (audio->rx_gain < db_to_linear(agc->rx_gain_db_max)) {
             float rx_db = linear_to_db(audio->rx_gain);
-            float new_rx_db = rx_db + 3.0f;
-            if (new_rx_db > agc->rx_gain_db_max) new_rx_db = agc->rx_gain_db_max;
-            float new_rx = db_to_linear(new_rx_db);
+            float new_rx = agc_step_gain_db(audio->rx_gain, 3.0f,
+                                            agc->rx_gain_db_min, agc->rx_gain_db_max);
+            float new_rx_db = linear_to_db(new_rx);
             agc_apply_gains(audio, audio->tx_gain, new_rx);
             log_info("agc steady | silêncio | rms=%.3f | rx_gain %.2f->%.2f (%.1f->%.1f dB)",
                      rms, audio->rx_gain, new_rx, rx_db, new_rx_db);
@@ -389,9 +399,9 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
         }
         if (audio->tx_gain < db_to_linear(agc->tx_gain_db_max)) {
             float tx_db = linear_to_db(audio->tx_gain);
-            float new_tx_db = tx_db + 1.5f;
-            if (new_tx_db > agc->tx_gain_db_max) new_tx_db = agc->tx_gain_db_max;
-            float new_tx = db_to_linear(new_tx_db);
+            float new_tx = agc_step_gain_db(audio->tx_gain, 1.5f,
+                                            agc->tx_gain_db_min, agc->tx_gain_db_max);
+            float new_tx_db = linear_to_db(new_tx);
             agc_apply_gains(audio, new_tx, audio->rx_gain);
             log_info("agc steady | silêncio (rx teto) | tx_gain %.2f->%.2f (%.1f->%.1f dB)",
                      audio->tx_gain, new_tx, tx_db, new_tx_db);

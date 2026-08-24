@@ -13,10 +13,10 @@ all: $(TEST_BINS)
 	$(CC) $(CFLAGS) $< $(SRC) -o $@ $(LDFLAGS)
 
 run_tests: all
-	@for test in $(TEST_BINS); do
-		echo "Running $$test...";
-		./$$test;
-		echo "-----------------------";
+	@for test in $(TEST_BINS); do \
+		echo "Running $$test..."; \
+		./$$test; \
+		echo "-----------------------"; \
 	done
 
 clean:

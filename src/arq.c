@@ -137,7 +137,15 @@ int arq_get_next_frame(ArqContext *ctx, ArqFrame *out_frame) {
 
 void arq_handle_ack(ArqContext *ctx, uint16_t ack_num) {
     uint16_t mod = ctx->window_size * 2;
-    
+
+    /* Ignore stale/duplicate/corrupt ACKs: a valid ACK acknowledges a sequence
+       in the range [snd_base, snd_base+window_size]; outside it, advancing the
+       base would wrap the sequence space and discard in-flight frames. */
+    uint16_t diff = mod_seq(ack_num + mod - ctx->sender.snd_base, mod);
+    if (diff > ctx->window_size) {
+        return;
+    }
+
     /* ACK is cumulative up to ack_num (exclusive) */
     while (ctx->sender.snd_base != ack_num) {
         if (ctx->sender.sent_buffer[ctx->sender.snd_base]) {
