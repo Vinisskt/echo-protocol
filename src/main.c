@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <stdatomic.h>
 #include <time.h>
+#include <math.h>
 
 volatile atomic_int keep_running = 1;
 
@@ -178,11 +179,13 @@ int main(int argc, char *argv[]) {
             last_stats = now;
             uint16_t tx_used = (echo.tx_rb->head - echo.tx_rb->tail) & BUFFER_MASK;
             uint16_t rx_used = (echo.rx_rb->head - echo.rx_rb->tail) & BUFFER_MASK;
-            log_info("status: TX buf=%d/%d RX buf=%d/%d pkts TX=%llu RX=%llu corrupt=%llu",
+            float in_rms = atomic_load(&audio.in_rms);
+            log_info("status: TX buf=%d/%d RX buf=%d/%d pkts TX=%llu RX=%llu corrupt=%llu in_rms=%.4f (%.1f dB)",
                      tx_used, BUFFER_SIZE, rx_used, BUFFER_SIZE,
                      (unsigned long long)echo.stats.tx_packets,
                      (unsigned long long)echo.stats.rx_packets,
-                     (unsigned long long)echo.stats.rx_corrupted);
+                     (unsigned long long)echo.stats.rx_corrupted,
+                     in_rms, 20.0f * log10f(in_rms + 1e-9f));
         }
     }
 

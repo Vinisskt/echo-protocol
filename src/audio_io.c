@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
+#include <math.h>
 #include <dlfcn.h>
 
 static uint8_t current_tx_symbol = 0;
@@ -43,6 +45,19 @@ static int paCallback(const void *inputBuffer, void *outputBuffer,
 
     for (unsigned int i = 0; i < framesPerBuffer; i++) {
         if (in) {
+            float x = in[i];
+            /* Remove DC offset (EMA lenta) antes de medir potência — evita que o
+               DC infle a estimativa de RMS (DEM4-agc.md: ordem DC -> AGC). */
+            audio->in_dc_ema = AUDIO_DC_ALPHA * audio->in_dc_ema + (1.0f - AUDIO_DC_ALPHA) * x;
+            float xac = x - audio->in_dc_ema;
+            float x2 = xac * xac;
+            audio->in_rms_sum += x2 - audio->in_rms_win[audio->in_rms_idx];
+            audio->in_rms_win[audio->in_rms_idx] = x2;
+            audio->in_rms_idx = (audio->in_rms_idx + 1) % AUDIO_RMS_WIN;
+            float rms = (audio->in_rms_sum > 0.0f)
+                        ? sqrtf(audio->in_rms_sum / AUDIO_RMS_WIN)
+                        : 0.0f;
+            atomic_store(&audio->in_rms, rms);
             audio_to_rb(echo, &in[i]);
         }
 
@@ -82,6 +97,11 @@ int audio_init(AudioState *audio, EchoProtocol *echo, int input_id, int output_i
 
     audio->echo = echo;
     audio->agc_freeze = 0;
+    audio->in_rms_idx = 0;
+    audio->in_rms_sum = 0.0f;
+    audio->in_dc_ema = 0.0f;
+    memset(audio->in_rms_win, 0, sizeof(audio->in_rms_win));
+    atomic_store(&audio->in_rms, 0.0f);
 
     PaStreamParameters inputParams, outputParams;
 
