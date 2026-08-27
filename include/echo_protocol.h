@@ -68,4 +68,9 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len);
 void rb_to_audio(EchoProtocol *echo, uint8_t *symbol);
 void audio_to_rb(EchoProtocol *echo, float *sample);
 
+#ifdef ECHO_PROTOCOL_TEST
+/* Acesso a funções static para testes unitários (compilado só com -DECHO_PROTOCOL_TEST). */
+void echo_test_handle_data_state(EchoProtocol *echo, uint8_t bit);
+#endif
+
 #endif

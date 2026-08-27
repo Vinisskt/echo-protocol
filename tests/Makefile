@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -I../include
+CFLAGS = -Wall -Wextra -I../include -DECHO_PROTOCOL_TEST
 LDFLAGS = -lm -llz4 -lpthread
 SRC = ../src/rb_bits.c ../src/mod_fsk.c ../src/mod_afsk.c ../src/demod_afsk.c ../src/echo_protocol.c ../src/tun_tap.c ../src/rohc.c ../src/log.c ../src/scrambler.c ../src/fec.c ../src/agc.c
 TEST_SRCS = $(wildcard test_*.c)

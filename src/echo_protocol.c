@@ -153,6 +153,11 @@ static void handle_data_state(EchoProtocol *echo, uint8_t bit) {
         if (echo->rx.bits_received == (payload_bits + 16)) {
             echo->rx.state = SEARCHING;
             atomic_store(&echo->rx.packet_ready, 1);
+        } else if (echo->rx.bits_received > (payload_bits + 16)) {
+            /* Comprimento declarado no header não bateu com o recebido
+               (ex.: packet_len corrompido) -> descarta já, em vez de travar
+               em DATA até o timeout de 6 s de process_rx_bit. */
+            rx_reset(echo);
         }
         return;
     }
@@ -390,3 +395,10 @@ void echo_close(EchoProtocol *echo) {
     free(echo->tx_rb);
     free(echo->rx_rb);
 }
+
+#ifdef ECHO_PROTOCOL_TEST
+/* Expõe handle_data_state para testes unitários (não faz parte do binário normal). */
+void echo_test_handle_data_state(EchoProtocol *echo, uint8_t bit) {
+    handle_data_state(echo, bit);
+}
+#endif

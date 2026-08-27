@@ -570,6 +570,57 @@ void test_echo_close_does_not_crash() {
     PASS();
 }
 
+void test_rx_state_machine_exact_len_delivers_packet() {
+    TEST("handle_data_state: exact length sets packet_ready and returns to SEARCHING (good path)");
+    EchoProtocol echo;
+    memset(&echo, 0, sizeof(echo));
+    echo.rx_rb = rb_init();
+    echo.rx.state = DATA;
+    echo.rx.bits_received = 16;   /* header já validado/acumulado */
+    echo.rx.packet_len = 3;       /* alvo = 16 + 3*8 = 40 */
+    echo.rx.header_accumulator = 0;
+    echo.rx.last_rx_time = 0;
+    echo.rx.is_compressed = 0;
+    echo.rx.is_rohc = 0;
+    echo.rx.is_fec = 0;
+    int target = 16 + 3 * 8;
+    for (int i = 17; i <= target; i++) {
+        echo.rx.bits_received = i;
+        echo_test_handle_data_state(&echo, 0);
+    }
+    if (echo.rx.state != SEARCHING) { FAIL("state != SEARCHING after exact length"); free(echo.rx_rb); return; }
+    if (echo.rx.packet_ready != 1) { FAIL("packet_ready not set after exact length"); free(echo.rx_rb); return; }
+    PASS();
+    free(echo.rx_rb);
+}
+
+void test_rx_state_machine_overshoot_corrupt_len_resets() {
+    TEST("handle_data_state: overshoot on corrupt packet_len resets (horrible path)");
+    EchoProtocol echo;
+    memset(&echo, 0, sizeof(echo));
+    echo.rx_rb = rb_init();
+    echo.rx.state = DATA;
+    echo.rx.bits_received = 16;
+    echo.rx.packet_len = 1;       /* alvo = 16 + 8 = 24 (declarado curto) */
+    echo.rx.header_accumulator = 0;
+    echo.rx.last_rx_time = 0;
+    echo.rx.is_compressed = 0;
+    echo.rx.is_rohc = 0;
+    echo.rx.is_fec = 0;
+    /* Envia bits além do comprimento declarado (framing perdido / len corrompido). */
+    int target = 16 + 1 * 8;
+    echo.rx.bits_received = target + 1;  /* overshoot */
+    echo_test_handle_data_state(&echo, 0);
+    if (echo.rx.state != SEARCHING) {
+        FAIL("overshoot did not reset to SEARCHING (stuck in DATA until 6s timeout)");
+        free(echo.rx_rb);
+        return;
+    }
+    if (echo.rx.bits_received != 0) { FAIL("rx_reset did not clear bits_received"); free(echo.rx_rb); return; }
+    PASS();
+    free(echo.rx_rb);
+}
+
 void test_echo_close_frees_buffers() {
     TEST("echo_close frees allocated buffers and closes fd");
     EchoProtocol echo;
@@ -646,6 +697,8 @@ int main() {
 
     printf("\n[rx state machine]\n");
     test_rx_state_machine_searching_to_data();
+    test_rx_state_machine_exact_len_delivers_packet();
+    test_rx_state_machine_overshoot_corrupt_len_resets();
 
     printf("\n[tun_to_rb]\n");
     test_tun_to_rb_via_pipe_no_compression();
