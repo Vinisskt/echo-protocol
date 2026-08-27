@@ -6,6 +6,22 @@
 
 static void agc_calibrate(AGCState *agc, EchoProtocol *echo, AudioState *audio, time_t now);
 static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, time_t now);
+
+static int agc_read_deltas(AGCState *agc, EchoProtocol *echo, AudioState *audio,
+                           uint64_t *d_sync, uint64_t *d_pkts, uint64_t *d_corrupt,
+                           float *rms, float *power_db, float *error_db);
+static int agc_check_lock_exit(AGCState *agc, uint64_t d_sync, uint64_t d_pkts, uint64_t d_corrupt,
+                               float rms, time_t now);
+static int agc_try_enter_locked(AGCState *agc, AudioState *audio, uint64_t d_pkts, uint64_t d_corrupt,
+                                float rms, time_t now);
+static int agc_check_auto_echo(AGCState *agc, AudioState *audio, uint64_t d_sync, uint64_t d_pkts,
+                               uint64_t d_corrupt, float rms, time_t now);
+static int agc_check_clip(AGCState *agc, AudioState *audio, float rms, time_t now);
+static int agc_proportional_loop(AGCState *agc, AudioState *audio, float rms, float power_db,
+                                 float error_db, time_t now);
+static int agc_check_silence(AGCState *agc, AudioState *audio, uint64_t d_sync, uint64_t d_pkts,
+                             float rms, time_t now);
+
 static void agc_apply_gains(AudioState *audio, float tx_gain, float rx_gain);
 static float agc_clamp(float v, float min, float max);
 static float db_to_linear(float db);
@@ -197,7 +213,7 @@ static void agc_calibrate(AGCState *agc, EchoProtocol *echo, AudioState *audio, 
     }
 
     /* Se chegou no teto de ambos e ainda não tem pacotes -> reset e tenta combo diferente */
-    if (audio->tx_gain >= db_to_linear(agc->tx_gain_db_max) * 0.95f && 
+    if (audio->tx_gain >= db_to_linear(agc->tx_gain_db_max) * 0.95f &&
         audio->rx_gain >= db_to_linear(agc->rx_gain_db_max) * 0.95f) {
         log_warn("agc calib | teto atingido sem link -> reset gains para base");
         agc_apply_gains(audio, 0.5f, 4.0f);
@@ -213,85 +229,107 @@ static void agc_calibrate(AGCState *agc, EchoProtocol *echo, AudioState *audio, 
 static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, time_t now) {
     if (now - agc->last_adjust < agc->settle_secs) return;
 
-    uint64_t d_sync = echo->stats.rx_sync_found - agc->last_rx_sync;
-    uint64_t d_pkts = echo->stats.rx_packets - agc->last_rx_packets;
-    uint64_t d_corrupt = echo->stats.rx_corrupted - agc->last_rx_corrupted;
+    uint64_t d_sync, d_pkts, d_corrupt;
+    float rms, power_db, error_db;
 
-    agc->last_rx_sync = echo->stats.rx_sync_found;
-    agc->last_rx_packets = echo->stats.rx_packets;
-    agc->last_rx_corrupted = echo->stats.rx_corrupted;
-
-    float rms = atomic_load(&audio->in_rms);
-    float power = rms * rms;
-    if (agc->power_avg == 0.0f) agc->power_avg = power;
-    else agc->power_avg = (1.0f - agc->alpha) * agc->power_avg + agc->alpha * power;
-
-    float power_db = 10.0f * log10f(agc->power_avg + 1e-12f);
-    float error_db = agc->target_db - power_db;
-    float gain_db_step = 4.0f * agc->loop_bw * error_db;
-
-    /* --- LOCK/UNLOCK LOGIC --- */
+    if (!agc_read_deltas(agc, echo, audio, &d_sync, &d_pkts, &d_corrupt,
+                         &rms, &power_db, &error_db)) {
+        return;
+    }
 
     if (agc->locked) {
-        /* CHECK UNLOCK CONDITIONS */
-        int unlock = 0;
-        if (d_corrupt >= (uint64_t)agc->unlock_corrupt_thresh) {
-            log_warn("agc unlock | corrupção spike (%llu >= %d) | destravando ganhos",
-                     (unsigned long long)d_corrupt, agc->unlock_corrupt_thresh);
-            unlock = 1;
-        }
-        float current_rssi_db = 20.0f * log10f(rms + 1e-12f);
-        float locked_rssi_db = 20.0f * log10f(agc->best_rms + 1e-12f);
-        if ((locked_rssi_db - current_rssi_db) >= agc->unlock_rssi_drop_db) {
-            log_warn("agc unlock | RSSI drop %.1f dB (%.1f->%.1f) | destravando",
-                     locked_rssi_db - current_rssi_db, locked_rssi_db, current_rssi_db);
-            unlock = 1;
-        }
-        if (d_sync == 0 && d_pkts == 0) {
-            log_warn("agc unlock | link silencioso | destravando");
-            unlock = 1;
-        }
-        /* NOVO: unlock por taxa de corrupção (>20% nos pacotes da janela) */
-        if (d_pkts > 10) {  /* só avalia se tem amostras suficientes */
-            float corrupt_rate = (float)d_corrupt / (float)d_pkts;
-            if (corrupt_rate > 0.20f) {  /* >20% corrupção */
-                log_warn("agc unlock | taxa corrupção %.1f%% (%llu/%llu) > 20%% | destravando",
-                         corrupt_rate * 100.0f, (unsigned long long)d_corrupt, (unsigned long long)d_pkts);
-                unlock = 1;
-            }
-        }
-
-        if (unlock) {
-            agc->locked = 0;
-            agc->lock_good_streak = 0;
-            agc->phase = AGC_STEADY;
-            agc->settle_secs = 5;
-            agc->last_unlock_time = now;  /* registra tempo do unlock para cooldown */
-            log_info("agc | DESTRAVADO | voltando para STEADY");
+        if (agc_check_lock_exit(agc, d_sync, d_pkts, d_corrupt, rms, now)) {
+            /* destravou: segue processando como não-travado */
         } else {
-            /* LOCKED: mantém ganhos travados, só atualiza timestamp */
             agc->last_adjust = now;
             agc->lock_good_streak = 0;
             return;
         }
     }
 
-    /* NOT LOCKED: track good packets for lock */
+    if (agc_try_enter_locked(agc, audio, d_pkts, d_corrupt, rms, now)) return;
+    if (agc_check_auto_echo(agc, audio, d_sync, d_pkts, d_corrupt, rms, now)) return;
+    if (agc_check_clip(agc, audio, rms, now)) return;
+    if (agc_proportional_loop(agc, audio, rms, power_db, error_db, now)) return;
+    if (agc_check_silence(agc, audio, d_sync, d_pkts, rms, now)) return;
+
+    agc->last_adjust = now;
+}
+
+/* Lê deltas dos contadores e calcula potência/erro do laço. */
+static int agc_read_deltas(AGCState *agc, EchoProtocol *echo, AudioState *audio,
+                           uint64_t *d_sync, uint64_t *d_pkts, uint64_t *d_corrupt,
+                           float *rms, float *power_db, float *error_db) {
+    *d_sync = echo->stats.rx_sync_found - agc->last_rx_sync;
+    *d_pkts = echo->stats.rx_packets - agc->last_rx_packets;
+    *d_corrupt = echo->stats.rx_corrupted - agc->last_rx_corrupted;
+
     agc->last_rx_sync = echo->stats.rx_sync_found;
     agc->last_rx_packets = echo->stats.rx_packets;
     agc->last_rx_corrupted = echo->stats.rx_corrupted;
 
-    /* TRACK GOOD PACKETS FOR LOCK */
-    int good_this_window = (d_pkts > d_corrupt) ? (d_pkts - d_corrupt) : 0;
+    *rms = atomic_load(&audio->in_rms);
+    float power = *rms * *rms;
+    if (agc->power_avg == 0.0f) agc->power_avg = power;
+    else agc->power_avg = (1.0f - agc->alpha) * agc->power_avg + agc->alpha * power;
+
+    *power_db = 10.0f * log10f(agc->power_avg + 1e-12f);
+    *error_db = agc->target_db - *power_db;
+    return 1;
+}
+
+/* Verifica condições de unlock (retorna 1 se destravou). */
+static int agc_check_lock_exit(AGCState *agc, uint64_t d_sync, uint64_t d_pkts, uint64_t d_corrupt,
+                               float rms, time_t now) {
+    int unlock = 0;
+    if (d_corrupt >= (uint64_t)agc->unlock_corrupt_thresh) {
+        log_warn("agc unlock | corrupção spike (%llu >= %d) | destravando ganhos",
+                 (unsigned long long)d_corrupt, agc->unlock_corrupt_thresh);
+        unlock = 1;
+    }
+    float current_rssi_db = 20.0f * log10f(rms + 1e-12f);
+    float locked_rssi_db = 20.0f * log10f(agc->best_rms + 1e-12f);
+    if ((locked_rssi_db - current_rssi_db) >= agc->unlock_rssi_drop_db) {
+        log_warn("agc unlock | RSSI drop %.1f dB (%.1f->%.1f) | destravando",
+                 locked_rssi_db - current_rssi_db, locked_rssi_db, current_rssi_db);
+        unlock = 1;
+    }
+    if (d_sync == 0 && d_pkts == 0) {
+        log_warn("agc unlock | link silencioso | destravando");
+        unlock = 1;
+    }
+    if (d_pkts > 10) {
+        float corrupt_rate = (float)d_corrupt / (float)d_pkts;
+        if (corrupt_rate > 0.20f) {
+            log_warn("agc unlock | taxa corrupção %.1f%% (%llu/%llu) > 20%% | destravando",
+                     corrupt_rate * 100.0f, (unsigned long long)d_corrupt, (unsigned long long)d_pkts);
+            unlock = 1;
+        }
+    }
+
+    if (unlock) {
+        agc->locked = 0;
+        agc->lock_good_streak = 0;
+        agc->phase = AGC_STEADY;
+        agc->settle_secs = 5;
+        agc->last_unlock_time = now;
+        log_info("agc | DESTRAVADO | voltando para STEADY");
+        return 1;
+    }
+    return 0;
+}
+
+/* Tenta entrar em AGC_LOCKED (retorna 1 se travou). */
+static int agc_try_enter_locked(AGCState *agc, AudioState *audio, uint64_t d_pkts, uint64_t d_corrupt,
+                                float rms, time_t now) {
+    int good_this_window = (d_pkts > d_corrupt) ? (int)(d_pkts - d_corrupt) : 0;
     if (good_this_window > 0 && d_corrupt == 0) {
         agc->lock_good_streak += good_this_window;
         if (agc->lock_good_streak >= agc->lock_threshold && !agc->locked) {
-            /* COOLDOWN: evita re-lock imediato após unlock */
             if (agc->last_unlock_time > 0 && (now - agc->last_unlock_time) < agc->unlock_cooldown_secs) {
                 log_info("agc | cooldown ativo (%ds/%ds) | aguardando para re-lock",
                          (int)(now - agc->last_unlock_time), agc->unlock_cooldown_secs);
             } else {
-                /* LOCK GAINS */
                 agc->locked = 1;
                 agc->locked_tx_gain_db = linear_to_db(audio->tx_gain);
                 agc->locked_rx_gain_db = linear_to_db(audio->rx_gain);
@@ -302,15 +340,18 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
                          agc->locked_tx_gain_db, agc->locked_rx_gain_db, rms,
                          agc->lock_good_streak, agc->lock_threshold);
                 agc->last_adjust = now;
-                return;
+                return 1;
             }
         }
     } else if (d_corrupt > 0) {
-        /* corruption resets streak */
         agc->lock_good_streak = 0;
     }
+    return 0;
+}
 
-    /* 1) Auto-echo: syncs corrompidas sem pacotes bons -> baixa TX gain */
+/* Auto-echo: syncs corrompidas sem pacotes bons -> baixa TX gain. Retorna 1 se agiu. */
+static int agc_check_auto_echo(AGCState *agc, AudioState *audio, uint64_t d_sync, uint64_t d_pkts,
+                               uint64_t d_corrupt, float rms, time_t now) {
     if (d_pkts > 0) {
         agc->echo_streak = 0;
     } else if (d_sync > 0 && d_corrupt >= d_sync) {
@@ -328,7 +369,7 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
             log_warn("agc steady | auto-eco | rms=%.3f | tx_gain %.2f->%.2f (%.1f->%.1f dB)",
                      rms, audio->tx_gain, new_tx, tx_db, new_tx_db);
             agc->last_adjust = now;
-            return;
+            return 1;
         }
         if (rms < agc->rms_min && audio->rx_gain < db_to_linear(agc->rx_gain_db_max)) {
             float rx_db = linear_to_db(audio->rx_gain);
@@ -339,11 +380,14 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
             log_info("agc steady | sinal fraco (pos eco) | rms=%.3f | rx_gain %.2f->%.2f (%.1f->%.1f dB)",
                      rms, audio->rx_gain, new_rx, rx_db, new_rx_db);
             agc->last_adjust = now;
-            return;
+            return 1;
         }
     }
+    return 0;
+}
 
-    /* 2) Clip no ADC -> baixa RX gain */
+/* Clip no ADC -> baixa RX gain. Retorna 1 se agiu. */
+static int agc_check_clip(AGCState *agc, AudioState *audio, float rms, time_t now) {
     if (rms > agc->rms_max && audio->rx_gain > db_to_linear(agc->rx_gain_db_min)) {
         float rx_db = linear_to_db(audio->rx_gain);
         float new_rx_db = rx_db - 3.0f;
@@ -353,12 +397,17 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
         log_warn("agc steady | clip | rms=%.3f | rx_gain %.2f->%.2f (%.1f->%.1f dB)",
                  rms, audio->rx_gain, new_rx, rx_db, new_rx_db);
         agc->last_adjust = now;
-        return;
+        return 1;
     }
+    return 0;
+}
 
-    /* 3) Laço proporcional em dB para manter RMS no target */
+/* Laço proporcional em dB para manter RMS no target. Retorna 1 se agiu. */
+static int agc_proportional_loop(AGCState *agc, AudioState *audio, float rms, float power_db,
+                                 float error_db, time_t now) {
     if (fabsf(error_db) > 1.0f) {  /* só ajusta se erro > 1 dB */
         float rx_db = linear_to_db(audio->rx_gain);
+        float gain_db_step = 4.0f * agc->loop_bw * error_db;
         float new_rx_db = rx_db + gain_db_step;
         new_rx_db = agc_clamp(new_rx_db, agc->rx_gain_db_min, agc->rx_gain_db_max);
         float new_rx = db_to_linear(new_rx_db);
@@ -367,11 +416,15 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
             log_info("agc steady | loop dB | rms=%.3f (%.1f dB) | target=%.1f dB | err=%.1f dB | rx_gain %.2f->%.2f (%.1f->%.1f dB)",
                      rms, power_db, agc->target_db, error_db, audio->rx_gain, new_rx, rx_db, new_rx_db);
             agc->last_adjust = now;
-            return;
+            return 1;
         }
     }
+    return 0;
+}
 
-    /* 4) Silêncio: nenhum sinal do peer -> sobe RX gain */
+/* Silêncio: nenhum sinal do peer -> sobe ganho. Retorna 1 se agiu. */
+static int agc_check_silence(AGCState *agc, AudioState *audio, uint64_t d_sync, uint64_t d_pkts,
+                             float rms, time_t now) {
     if (d_sync == 0 && d_pkts == 0 && rms < agc->rms_min) {
         if (audio->rx_gain < db_to_linear(agc->rx_gain_db_max)) {
             float rx_db = linear_to_db(audio->rx_gain);
@@ -382,7 +435,7 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
             log_info("agc steady | silêncio | rms=%.3f | rx_gain %.2f->%.2f (%.1f->%.1f dB)",
                      rms, audio->rx_gain, new_rx, rx_db, new_rx_db);
             agc->last_adjust = now;
-            return;
+            return 1;
         }
         if (audio->tx_gain < db_to_linear(agc->tx_gain_db_max)) {
             float tx_db = linear_to_db(audio->tx_gain);
@@ -393,12 +446,10 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
             log_info("agc steady | silêncio (rx teto) | tx_gain %.2f->%.2f (%.1f->%.1f dB)",
                      audio->tx_gain, new_tx, tx_db, new_tx_db);
             agc->last_adjust = now;
-            return;
+            return 1;
         }
     }
-
-    /* 5) Link OK: mantém ganhos, só atualiza timestamp */
-    agc->last_adjust = now;
+    return 0;
 }
 
 static void agc_apply_gains(AudioState *audio, float tx_gain, float rx_gain) {
