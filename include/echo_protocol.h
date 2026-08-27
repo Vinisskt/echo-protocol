@@ -9,6 +9,9 @@
 #include "scrambler.h"
 #include <stdatomic.h>
 
+/* Forward declare para evitar include circular com agc.h */
+typedef struct AGCState AGCState;
+
 #define SIZE_BUF 2048
 #define SIZE_BYTE 8
 #define MAX_TX_FRAME_BYTES 1024
@@ -59,6 +62,7 @@ typedef struct EchoProtocol_s {
     Scrambler tx_scrambler;
     Scrambler rx_scrambler;
     ProtocolStats stats;
+    AGCState *agc;
 } EchoProtocol;
 
 int echo_init(EchoProtocol *echo, char *dev_name);

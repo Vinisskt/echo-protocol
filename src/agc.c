@@ -1,4 +1,5 @@
 #include "../include/agc.h"
+#include "../include/echo_protocol.h"
 #include "../include/log.h"
 #include <stdlib.h>
 #include <string.h>

@@ -1,6 +1,7 @@
 #include "../include/echo_protocol.h"
 #include "../include/audio_io.h"
 #include "../include/log.h"
+#include "../include/agc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -147,6 +148,8 @@ int main(int argc, char *argv[]) {
 
     while (atomic_load(&keep_running)) {
         int ret = poll(fds, 1, 5);
+
+        agc_tune(echo.agc, &echo, &audio);
 
         if (ret > 0 && (fds[0].revents & POLLIN)) {
             uint16_t used = (echo.tx_rb->head - echo.tx_rb->tail) & BUFFER_MASK;

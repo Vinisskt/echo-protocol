@@ -1,9 +1,12 @@
 #ifndef AGC_H
 #define AGC_H
 
-#include "echo_protocol.h"
-#include "audio_io.h"
 #include <time.h>
+#include <stdint.h>
+#include "audio_io.h"
+
+/* Forward declare para EchoProtocol (evita include circular com echo_protocol.h) */
+typedef struct EchoProtocol_s EchoProtocol;
 
 typedef enum {
     AGC_CALIBRATING,   /* fase rapida: sonda enlace, ajusta ganho a cada 1-2s */
@@ -11,7 +14,7 @@ typedef enum {
     AGC_LOCKED         /* ganho travado: link bom, nao mexe mais */
 } AGCPhase;
 
-typedef struct {
+struct AGCState {
     uint64_t last_tx_packets;
     uint64_t last_rx_sync;
     uint64_t last_rx_packets;
@@ -57,7 +60,9 @@ typedef struct {
     int unlock_rssi_drop_db;    /* queda RSSI para destravar (ex: 6 dB) */
     time_t last_unlock_time;    /* timestamp do último unlock (cooldown) */
     int unlock_cooldown_secs;   /* segundos de cooldown antes de re-lock (ex: 30) */
-} AGCState;
+};
+
+typedef struct AGCState AGCState;
 
 void agc_init(AGCState *agc);
 void agc_tune(AGCState *agc, EchoProtocol *echo, AudioState *audio);

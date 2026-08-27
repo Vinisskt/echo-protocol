@@ -1,6 +1,7 @@
 #include "../include/echo_protocol.h"
 #include "../include/log.h"
 #include "../include/fec.h"
+#include "../include/agc.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +47,10 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
 
     scrambler_init(&echo->tx_scrambler);
     scrambler_init(&echo->rx_scrambler);
+
+    echo->agc = calloc(1, sizeof(AGCState));
+    if (!echo->agc) return -1;
+    agc_init(echo->agc);
 
     echo->tx.tx_sample_count = SAMPLES_PER_SYMBOL; 
 
@@ -394,6 +399,7 @@ void echo_close(EchoProtocol *echo) {
     close(echo->tun_fd);
     free(echo->tx_rb);
     free(echo->rx_rb);
+    free(echo->agc);
 }
 
 #ifdef ECHO_PROTOCOL_TEST
