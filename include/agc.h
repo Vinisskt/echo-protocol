@@ -10,8 +10,7 @@ typedef struct EchoProtocol_s EchoProtocol;
 
 typedef enum {
     AGC_CALIBRATING,   /* fase rapida: sonda enlace, ajusta ganho a cada 1-2s */
-    AGC_STEADY,        /* estado normal: ajusta so se necessario, a cada 5s */
-    AGC_LOCKED         /* ganho travado: link bom, nao mexe mais */
+    AGC_STEADY         /* estado normal: ajusta continuamente */
 } AGCPhase;
 
 struct AGCState {
@@ -49,17 +48,6 @@ struct AGCState {
     float best_rx_gain;
     int calib_done;
     time_t calib_start_time;
-
-    /* Lock de ganho (link estavel) */
-    int lock_good_streak;       /* pacotes bons consecutivos */
-    int lock_threshold;         /* quantos pacotes bons para travar (ex: 20) */
-    int locked;                 /* flag: ganho travado */
-    float locked_tx_gain_db;    /* ganho TX travado */
-    float locked_rx_gain_db;    /* ganho RX travado */
-    int unlock_corrupt_thresh;  /* corrupções absolutas para destravar (ex: 5) */
-    int unlock_rssi_drop_db;    /* queda RSSI para destravar (ex: 6 dB) */
-    time_t last_unlock_time;    /* timestamp do último unlock (cooldown) */
-    int unlock_cooldown_secs;   /* segundos de cooldown antes de re-lock (ex: 30) */
 };
 
 typedef struct AGCState AGCState;

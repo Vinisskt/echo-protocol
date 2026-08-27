@@ -26,7 +26,7 @@ static AudioState mock_audio(float tx_gain, float rx_gain, float rms) {
     return a;
 }
 
-/* Helper: create mock echo protocol with stats using real EchoProtocol */
+/* Helper: create mock echo protocol with stats */
 static EchoProtocol mock_echo(uint64_t sync, uint64_t pkts, uint64_t corrupt) {
     EchoProtocol e = {0};
     e.stats.rx_sync_found = sync;
@@ -59,10 +59,6 @@ void test_agc_init_defaults() {
     if (agc.alpha != 0.1f) { FAIL("alpha"); return; }
     if (agc.enabled != 1) { FAIL("enabled"); return; }
     if (agc.phase != AGC_CALIBRATING) { FAIL("phase not CALIBRATING"); return; }
-    if (agc.lock_threshold != 20) { FAIL("lock_threshold"); return; }
-    if (agc.unlock_corrupt_thresh != 5) { FAIL("unlock_corrupt_thresh"); return; }
-    if (agc.unlock_rssi_drop_db != 6) { FAIL("unlock_rssi_drop_db"); return; }
-    if (agc.unlock_cooldown_secs != 30) { FAIL("unlock_cooldown_secs"); return; }
     PASS();
 }
 
@@ -246,133 +242,6 @@ void test_agc_steady_silence_tx_gain_up_when_rx_maxed() {
     PASS();
 }
 
-void test_agc_lock_after_good_streak() {
-    TEST("agc locks gains after lock_threshold good packets");
-    AGCState agc;
-    agc_init(&agc);
-    agc.phase = AGC_STEADY;
-    agc.last_adjust = time(NULL) - 10;
-    agc.settle_secs = 5;
-    agc.lock_threshold = 5;
-    agc.lock_good_streak = 0;
-    agc.last_unlock_time = 0;
-    
-    EchoProtocol echo = mock_echo(10, 10, 0);  /* 10 good packets */
-    AudioState audio = mock_audio(1.0f, 2.0f, 0.3f);
-    
-    agc_tune(&agc, &echo, &audio);
-    
-    if (!agc.locked) { FAIL("not locked after good streak"); return; }
-    if (agc.phase != AGC_LOCKED) { FAIL("phase not LOCKED"); return; }
-    PASS();
-}
-
-void test_agc_unlock_on_corruption_spike() {
-    TEST("agc unlocks on corruption spike >= unlock_corrupt_thresh");
-    AGCState agc;
-    agc_init(&agc);
-    agc.phase = AGC_LOCKED;
-    agc.locked = 1;
-    agc.locked_tx_gain_db = 0.0f;
-    agc.locked_rx_gain_db = 6.0f;
-    agc.best_rms = 0.3f;
-    agc.unlock_corrupt_thresh = 3;
-    agc.last_adjust = time(NULL) - 10;
-    
-    EchoProtocol echo = mock_echo(10, 10, 5);  /* 5 corruptions */
-    AudioState audio = mock_audio(1.0f, 4.0f, 0.3f);
-    
-    agc_tune(&agc, &echo, &audio);
-    
-    if (agc.locked) { FAIL("not unlocked on corruption spike"); return; }
-    if (agc.phase != AGC_STEADY) { FAIL("phase not STEADY after unlock"); return; }
-    PASS();
-}
-
-void test_agc_unlock_on_rssi_drop() {
-    TEST("agc unlocks on RSSI drop >= unlock_rssi_drop_db");
-    AGCState agc;
-    agc_init(&agc);
-    agc.phase = AGC_LOCKED;
-    agc.locked = 1;
-    agc.locked_tx_gain_db = 0.0f;
-    agc.locked_rx_gain_db = 6.0f;
-    agc.best_rms = 0.3f;  /* ~-10 dB */
-    agc.unlock_rssi_drop_db = 6;
-    agc.last_adjust = time(NULL) - 10;
-    
-    EchoProtocol echo = mock_echo(10, 10, 0);
-    /* RMS drops to 0.05 (~ -26 dB), drop = 16 dB > 6 dB threshold */
-    AudioState audio = mock_audio(1.0f, 4.0f, 0.05f);
-    
-    agc_tune(&agc, &echo, &audio);
-    
-    if (agc.locked) { FAIL("not unlocked on RSSI drop"); return; }
-    PASS();
-}
-
-void test_agc_unlock_on_corruption_rate() {
-    TEST("agc unlocks on corruption rate > 20% with sufficient samples");
-    AGCState agc;
-    agc_init(&agc);
-    agc.phase = AGC_LOCKED;
-    agc.locked = 1;
-    agc.locked_tx_gain_db = 0.0f;
-    agc.locked_rx_gain_db = 6.0f;
-    agc.best_rms = 0.3f;
-    agc.last_adjust = time(NULL) - 10;
-    
-    /* 50 packets, 15 corruptions = 30% > 20% */
-    EchoProtocol echo = mock_echo(10, 50, 15);
-    AudioState audio = mock_audio(1.0f, 4.0f, 0.3f);
-    
-    agc_tune(&agc, &echo, &audio);
-    
-    if (agc.locked) { FAIL("not unlocked on high corruption rate"); return; }
-    PASS();
-}
-
-void test_agc_unlock_on_silent_link() {
-    TEST("agc unlocks on silent link (no sync, no packets)");
-    AGCState agc;
-    agc_init(&agc);
-    agc.phase = AGC_LOCKED;
-    agc.locked = 1;
-    agc.locked_tx_gain_db = 0.0f;
-    agc.locked_rx_gain_db = 6.0f;
-    agc.best_rms = 0.3f;
-    agc.last_adjust = time(NULL) - 10;
-    
-    EchoProtocol echo = mock_echo(0, 0, 0);
-    AudioState audio = mock_audio(1.0f, 4.0f, 0.3f);
-    
-    agc_tune(&agc, &echo, &audio);
-    
-    if (agc.locked) { FAIL("not unlocked on silent link"); return; }
-    PASS();
-}
-
-void test_agc_lock_cooldown_after_unlock() {
-    TEST("agc respects cooldown before re-locking after unlock");
-    AGCState agc;
-    agc_init(&agc);
-    agc.phase = AGC_STEADY;
-    agc.locked = 0;
-    agc.lock_good_streak = 25;  /* exceeds threshold */
-    agc.lock_threshold = 20;
-    agc.last_unlock_time = time(NULL) - 10;  /* unlocked 10s ago */
-    agc.unlock_cooldown_secs = 30;
-    agc.last_adjust = time(NULL) - 10;
-    
-    EchoProtocol echo = mock_echo(10, 10, 0);
-    AudioState audio = mock_audio(1.0f, 2.0f, 0.3f);
-    
-    agc_tune(&agc, &echo, &audio);
-    
-    if (agc.locked) { FAIL("locked despite active cooldown"); return; }
-    PASS();
-}
-
 void test_agc_freeze_during_tx() {
     TEST("agc_tune returns early when audio->agc_freeze is set");
     AGCState agc;
@@ -422,14 +291,6 @@ int main() {
     test_agc_steady_loop_control();
     test_agc_steady_silence_rx_gain_up();
     test_agc_steady_silence_tx_gain_up_when_rx_maxed();
-    
-    printf("\n[lock/unlock]\n");
-    test_agc_lock_after_good_streak();
-    test_agc_unlock_on_corruption_spike();
-    test_agc_unlock_on_rssi_drop();
-    test_agc_unlock_on_corruption_rate();
-    test_agc_unlock_on_silent_link();
-    test_agc_lock_cooldown_after_unlock();
     
     printf("\n[freeze]\n");
     test_agc_freeze_during_tx();
