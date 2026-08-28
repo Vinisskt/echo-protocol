@@ -41,27 +41,58 @@ uint8_t check_sync_word(uint32_t *check_word, uint8_t *bit) {
 	return 1;
 }
 
-void pre_calc_goertzel(StateGoertzel *state, uint16_t *freq) {
-	state->n = SAMPLES_PER_SYMBOL;
-	state->k = ((float)state->n * *freq) / SAMPLE_RATE;
-	state->omega = (2.0f * M_PI * state->k) / state->n;
-	state->coeff = 2.0f * cosf(state->omega);
-	state->q1 = 0; 
-	state->q2 = 0;
+static void init_hamming_window(StateGoertzel *state) {
+    for (int i = 0; i < state->n; i++) {
+        state->hamming[i] = 0.54f - 0.46f * cosf(2.0f * M_PI * i / (state->n - 1));
+    }
+}
 
-	return;
+void pre_calc_goertzel(StateGoertzel *state, uint16_t *freq) {
+    state->n = SAMPLES_PER_SYMBOL;
+    state->k = ((float)state->n * *freq) / SAMPLE_RATE;
+    state->omega = (2.0f * M_PI * state->k) / state->n;
+    state->coeff = 2.0f * cosf(state->omega);
+    state->q1 = 0.0f;
+    state->q2 = 0.0f;
+    state->buf_idx = 0;
+    state->last_mag = 0.0f;
+    init_hamming_window(state);
 }
 
 float process_goertzel(StateGoertzel *state, float *sample) {
-	float q0 = *sample + (state->coeff * state->q1) - state->q2;
-	state->q2 = state->q1;
-	state->q1 = q0;
-	
-	return (state->q1 * state->q1) + (state->q2 * state->q2) - (state->q1 * state->q2 * state->coeff);
+    float q0 = *sample + (state->coeff * state->q1) - state->q2;
+    state->q2 = state->q1;
+    state->q1 = q0;
+    
+    return (state->q1 * state->q1) + (state->q2 * state->q2) - (state->q1 * state->q2 * state->coeff);
+}
+
+float process_goertzel_windowed(StateGoertzel *state, float *sample) {
+    state->window_buf[state->buf_idx] = *sample * state->hamming[state->buf_idx];
+    state->buf_idx++;
+
+    if (state->buf_idx < state->n) {
+        return state->last_mag;
+    }
+
+    float q1 = 0.0f;
+    float q2 = 0.0f;
+    for (int i = 0; i < state->n; i++) {
+        float q0 = state->window_buf[i] + (state->coeff * q1) - q2;
+        q2 = q1;
+        q1 = q0;
+    }
+
+    float mag = (q1 * q1) + (q2 * q2) - (q1 * q2 * state->coeff);
+    state->last_mag = mag;
+
+    state->buf_idx = 0;
+    return mag;
 }
 
 void reset_state(StateGoertzel *state) {
-	state->q1 = 0.0f;
-	state->q2 = 0.0f;
-	return;
+    state->q1 = 0.0f;
+    state->q2 = 0.0f;
+    state->buf_idx = 0;
+    state->last_mag = 0.0f;
 }

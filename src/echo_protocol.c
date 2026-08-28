@@ -217,7 +217,7 @@ static void process_rx_bit(EchoProtocol *echo, uint8_t bit) {
 void audio_to_rb(EchoProtocol *echo, float *sample) {
     float mag[4];
     for (int i = 0; i < 4; i++) {
-        mag[i] = process_goertzel(&echo->freq_states[i], sample);
+        mag[i] = process_goertzel_windowed(&echo->freq_states[i], sample);
     }
 
     if (++echo->rx.rx_sample_count < SAMPLES_PER_SYMBOL) {
