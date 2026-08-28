@@ -159,56 +159,7 @@ void test_generate_afsk_continuous_phase() {
     PASS();
 }
 
-void test_push_preamble_alternating_pattern() {
-    TEST("push_preamble inserts 16 bits (PREAMBLE = 0xAAAA = alternating 1010...)");
-    Buffer *rb = rb_init();
-    assert(rb != NULL);
-    push_preamble(rb);
-    uint8_t bit;
-    for (int i = 15; i >= 0; i--) {
-        if (!get_bits(rb, &bit)) { FAIL("preamble has fewer than 16 bits"); free(rb); return; }
-        uint8_t expected = (PREAMBLE >> i) & 1;
-        if (bit != expected) { FAIL("preamble bit incorrect"); free(rb); return; }
-    }
-    PASS();
-    free(rb);
-}
 
-void test_push_sync_word_correct_value() {
-    TEST("push_sync_word inserts SYNC_WORD (0x930B51DE) 32 bits");
-    Buffer *rb = rb_init();
-    assert(rb != NULL);
-    push_sync_word(rb);
-    uint8_t bit;
-    for (int i = 31; i >= 0; i--) {
-        if (!get_bits(rb, &bit)) { FAIL("sync word has fewer than 32 bits"); free(rb); return; }
-        uint8_t expected = (SYNC_WORD >> i) & 1;
-        if (bit != expected) { FAIL("sync word bit incorrect"); free(rb); return; }
-    }
-    PASS();
-    free(rb);
-}
-
-void test_push_preamble_and_sync_word_sequence() {
-    TEST("push_preamble + push_sync_word in sequence");
-    Buffer *rb = rb_init();
-    assert(rb != NULL);
-    push_preamble(rb);
-    push_sync_word(rb);
-    uint8_t bit;
-    for (int i = 15; i >= 0; i--) {
-        if (!get_bits(rb, &bit)) { FAIL("preamble incomplete"); free(rb); return; }
-        uint8_t expected = (PREAMBLE >> i) & 1;
-        if (bit != expected) { FAIL("preamble bit incorrect after preamble"); free(rb); return; }
-    }
-    for (int i = 31; i >= 0; i--) {
-        if (!get_bits(rb, &bit)) { FAIL("sync word incomplete"); free(rb); return; }
-        uint8_t expected = (SYNC_WORD >> i) & 1;
-        if (bit != expected) { FAIL("sync word incorrect after preamble"); free(rb); return; }
-    }
-    PASS();
-    free(rb);
-}
 
 int main() {
     printf("=== Complete Tests: AFSK Modulator (mod_afsk) ===\n\n");
@@ -225,11 +176,6 @@ int main() {
     test_generate_afsk_frequency_alternation();
     test_generate_afsk_constant_magnitude();
     test_generate_afsk_continuous_phase();
-
-    printf("\n[push_preamble / push_sync_word]\n");
-    test_push_preamble_alternating_pattern();
-    test_push_sync_word_correct_value();
-    test_push_preamble_and_sync_word_sequence();
 
     printf("\n=== Summary: %d PASS, %d FAIL ===\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;

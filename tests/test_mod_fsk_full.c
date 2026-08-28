@@ -92,12 +92,12 @@ void test_generate_fsk_magnitude_stable() {
 }
 
 void test_push_preamble_inserts_16_bits() {
-    TEST("push_preamble inserts 16 bits (PREAMBLE = 0xAAAA = alternating 1010...)");
+    TEST("push_preamble inserts 32 bits (PREAMBLE = 0xAAAAAAAA = alternating 1010...)");
     Buffer *buf = rb_init();
     push_preamble(buf);
     uint8_t bit;
-    for (int i = 15; i >= 0; i--) {
-        if (!get_bits(buf, &bit)) { FAIL("preamble has fewer than 16 bits"); free(buf); return; }
+    for (int i = 31; i >= 0; i--) {
+        if (!get_bits(buf, &bit)) { FAIL("preamble has fewer than 32 bits"); free(buf); return; }
         uint8_t expected = (PREAMBLE >> i) & 1;
         if (bit != expected) { FAIL("preamble bit incorrect"); free(buf); return; }
     }
@@ -125,7 +125,7 @@ void test_push_preamble_then_sync_word() {
     push_preamble(buf);
     push_sync_word(buf);
     uint8_t bit;
-    for (int i = 15; i >= 0; i--) {
+    for (int i = 31; i >= 0; i--) {
         if (!get_bits(buf, &bit)) { FAIL("preamble incomplete"); free(buf); return; }
         uint8_t expected = (PREAMBLE >> i) & 1;
         if (bit != expected) { FAIL("preamble bit incorrect after preamble"); free(buf); return; }
