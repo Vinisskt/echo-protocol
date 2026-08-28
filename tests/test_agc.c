@@ -55,7 +55,7 @@ void test_agc_init_defaults() {
     if (agc.rx_gain_db_min != 0.0f) { FAIL("rx_gain_db_min"); return; }
     if (agc.rx_gain_db_max != 24.0f) { FAIL("rx_gain_db_max"); return; }
     if (agc.target_db != -20.0f) { FAIL("target_db"); return; }
-    if (agc.loop_bw != 0.001f) { FAIL("loop_bw"); return; }
+    if (agc.loop_bw != 0.015f) { FAIL("loop_bw"); return; }
     if (agc.alpha != 0.1f) { FAIL("alpha"); return; }
     if (agc.enabled != 1) { FAIL("enabled"); return; }
     if (agc.phase != AGC_CALIBRATING) { FAIL("phase not CALIBRATING"); return; }
@@ -191,7 +191,7 @@ void test_agc_steady_loop_control() {
     agc.last_adjust = time(NULL) - 10;
     agc.settle_secs = 5;
     agc.target_db = -20.0f;
-    agc.loop_bw = 0.001f;
+    agc.loop_bw = 0.015f;
     agc.alpha = 0.1f;
     agc.power_avg = 0.0f;  /* will be initialized */
     

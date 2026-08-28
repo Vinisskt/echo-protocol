@@ -33,10 +33,10 @@ void agc_init(AGCState *agc) {
     agc->rms_min = 0.05f;
     agc->rms_max = 0.7f;
     agc->target_db = -20.0f;        /* alvo: -20 dB RMS */
-    agc->loop_bw = 0.001f;          /* largura de banda do laço */
+    agc->loop_bw = 0.015f;          /* largura de banda do laço (mais rápido) */
     agc->alpha = 0.1f;              /* EMA alpha para potência */
     agc->echo_sync_thresh = 3;
-    agc->settle_secs = 5;
+    agc->settle_secs = 1;           /* reagir mais rápido */
     agc->enabled = 1;
     agc->phase = AGC_CALIBRATING;
     agc->calib_tx_gain_step = 0;
