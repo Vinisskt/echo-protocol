@@ -32,11 +32,11 @@ void agc_init(AGCState *agc) {
     agc->rx_gain_db_max = 24.0f;    /* 16.0 linear */
     agc->rms_min = 0.05f;
     agc->rms_max = 0.7f;
-    agc->target_db = -20.0f;        /* alvo: -20 dB RMS */
-    agc->loop_bw = 0.015f;          /* largura de banda do laço (mais rápido) */
-    agc->alpha = 0.1f;              /* EMA alpha para potência */
-    agc->echo_sync_thresh = 3;
-    agc->settle_secs = 1;           /* reagir mais rápido */
+    agc->target_db = -18.0f;        /* alvo: -18 dB RMS (was -20, slightly higher for better SNR) */
+    agc->loop_bw = 0.02f;           /* largura de banda do laço (was 0.015, faster response) */
+    agc->alpha = 0.15f;             /* EMA alpha para potência (was 0.1, faster tracking) */
+    agc->echo_sync_thresh = 2;      /* was 3 - faster auto-echo detection */
+    agc->settle_secs = 2;           /* was 1 - more stable steady state */
     agc->enabled = 1;
     agc->phase = AGC_CALIBRATING;
     agc->calib_tx_gain_step = 0;
@@ -99,7 +99,7 @@ void agc_tune(AGCState *agc, EchoProtocol *echo, AudioState *audio) {
 }
 
 static void agc_calibrate(AGCState *agc, EchoProtocol *echo, AudioState *audio, time_t now) {
-    int calib_interval = (agc->calib_secs_elapsed < 5) ? 1 : 2;
+    int calib_interval = (agc->calib_secs_elapsed < 3) ? 1 : 2;  /* faster initial calibration */
     if (now - agc->last_adjust < calib_interval) return;
 
     float rms = atomic_load(&audio->in_rms);
@@ -135,7 +135,7 @@ static void agc_calibrate(AGCState *agc, EchoProtocol *echo, AudioState *audio, 
     /* 1) CLIP no ADC: rms alto demais -> baixa RX gain imediatamente */
     if (rms > agc->rms_max && audio->rx_gain > db_to_linear(agc->rx_gain_db_min)) {
         float rx_db = linear_to_db(audio->rx_gain);
-        float new_rx_db = rx_db - 3.0f;  /* -3 dB step */
+        float new_rx_db = rx_db - 4.0f;  /* -4 dB step (was -3, faster clip recovery) */
         if (new_rx_db < agc->rx_gain_db_min) new_rx_db = agc->rx_gain_db_min;
         float new_rx = db_to_linear(new_rx_db);
         agc_apply_gains(audio, audio->tx_gain, new_rx);
@@ -150,7 +150,7 @@ static void agc_calibrate(AGCState *agc, EchoProtocol *echo, AudioState *audio, 
         agc->echo_streak++;
         if (agc->echo_streak >= agc->echo_sync_thresh && audio->tx_gain > db_to_linear(agc->tx_gain_db_min)) {
             float tx_db = linear_to_db(audio->tx_gain);
-            float new_tx_db = tx_db - 3.0f;
+            float new_tx_db = tx_db - 4.0f;  /* -4 dB step (was -3) */
             if (new_tx_db < agc->tx_gain_db_min) new_tx_db = agc->tx_gain_db_min;
             float new_tx = db_to_linear(new_tx_db);
             agc_apply_gains(audio, new_tx, audio->rx_gain);
@@ -167,7 +167,7 @@ static void agc_calibrate(AGCState *agc, EchoProtocol *echo, AudioState *audio, 
     /* 3) Ruido excessivo sem sync: sinal fraco ou ganho alto demais -> ajusta */
     if (d_sync == 0 && rms > agc->rms_min && rms < agc->rms_max && audio->rx_gain > db_to_linear(agc->rx_gain_db_min)) {
         float rx_db = linear_to_db(audio->rx_gain);
-        float new_rx_db = rx_db - 1.5f;  /* -1.5 dB step */
+        float new_rx_db = rx_db - 2.0f;  /* -2 dB step (was -1.5) */
         if (new_rx_db < agc->rx_gain_db_min) new_rx_db = agc->rx_gain_db_min;
         float new_rx = db_to_linear(new_rx_db);
         agc_apply_gains(audio, audio->tx_gain, new_rx);
@@ -178,25 +178,25 @@ static void agc_calibrate(AGCState *agc, EchoProtocol *echo, AudioState *audio, 
     }
 
     /* Estratégia de busca em grade (multiplicativo linear, mais rápido para busca inicial) */
-    if (agc->calib_tx_gain_step < 5) {
-        float new_tx = agc_clamp(audio->tx_gain * 1.3f, db_to_linear(agc->tx_gain_db_min), db_to_linear(agc->tx_gain_db_max));
+    if (agc->calib_tx_gain_step < 6) {  /* was 5, one more step */
+        float new_tx = agc_clamp(audio->tx_gain * 1.25f, db_to_linear(agc->tx_gain_db_min), db_to_linear(agc->tx_gain_db_max));
         if (new_tx != audio->tx_gain) {
             agc_apply_gains(audio, new_tx, audio->rx_gain);
             agc->calib_tx_gain_step++;
             agc->last_adjust = now;
-            log_info("agc calib | TX gain up %.2f -> %.2f (step %d/5)",
+            log_info("agc calib | TX gain up %.2f -> %.2f (step %d/6)",
                      audio->tx_gain, new_tx, agc->calib_tx_gain_step);
             return;
         }
     }
 
-    if (agc->calib_rx_gain_step < 5) {
-        float new_rx = agc_clamp(audio->rx_gain * 1.4f, db_to_linear(agc->rx_gain_db_min), db_to_linear(agc->rx_gain_db_max));
+    if (agc->calib_rx_gain_step < 6) {  /* was 5, one more step */
+        float new_rx = agc_clamp(audio->rx_gain * 1.3f, db_to_linear(agc->rx_gain_db_min), db_to_linear(agc->rx_gain_db_max));
         if (new_rx != audio->rx_gain) {
             agc_apply_gains(audio, audio->tx_gain, new_rx);
             agc->calib_rx_gain_step++;
             agc->last_adjust = now;
-            log_info("agc calib | RX gain up %.2f -> %.2f (step %d/5)",
+            log_info("agc calib | RX gain up %.2f -> %.2f (step %d/6)",
                      audio->rx_gain, new_rx, agc->calib_rx_gain_step);
             return;
         }
@@ -272,7 +272,7 @@ static int agc_check_auto_echo(AGCState *agc, AudioState *audio, uint64_t d_sync
         agc->echo_streak = 0;
         if (audio->tx_gain > db_to_linear(agc->tx_gain_db_min)) {
             float tx_db = linear_to_db(audio->tx_gain);
-            float new_tx_db = tx_db - 3.0f;
+            float new_tx_db = tx_db - 4.0f;  /* was -3 */
             if (new_tx_db < agc->tx_gain_db_min) new_tx_db = agc->tx_gain_db_min;
             float new_tx = db_to_linear(new_tx_db);
             agc_apply_gains(audio, new_tx, audio->rx_gain);
@@ -283,7 +283,7 @@ static int agc_check_auto_echo(AGCState *agc, AudioState *audio, uint64_t d_sync
         }
         if (rms < agc->rms_min && audio->rx_gain < db_to_linear(agc->rx_gain_db_max)) {
             float rx_db = linear_to_db(audio->rx_gain);
-            float new_rx_db = rx_db + 3.0f;
+            float new_rx_db = rx_db + 4.0f;  /* was +3 */
             if (new_rx_db > agc->rx_gain_db_max) new_rx_db = agc->rx_gain_db_max;
             float new_rx = db_to_linear(new_rx_db);
             agc_apply_gains(audio, audio->tx_gain, new_rx);
@@ -300,7 +300,7 @@ static int agc_check_auto_echo(AGCState *agc, AudioState *audio, uint64_t d_sync
 static int agc_check_clip(AGCState *agc, AudioState *audio, float rms, time_t now) {
     if (rms > agc->rms_max && audio->rx_gain > db_to_linear(agc->rx_gain_db_min)) {
         float rx_db = linear_to_db(audio->rx_gain);
-        float new_rx_db = rx_db - 3.0f;
+        float new_rx_db = rx_db - 4.0f;  /* was -3 */
         if (new_rx_db < agc->rx_gain_db_min) new_rx_db = agc->rx_gain_db_min;
         float new_rx = db_to_linear(new_rx_db);
         agc_apply_gains(audio, audio->tx_gain, new_rx);
@@ -315,7 +315,7 @@ static int agc_check_clip(AGCState *agc, AudioState *audio, float rms, time_t no
 /* Laço proporcional em dB para manter RMS no target. Retorna 1 se agiu. */
 static int agc_proportional_loop(AGCState *agc, AudioState *audio, float rms, float power_db,
                                  float error_db, time_t now) {
-    if (fabsf(error_db) > 1.0f) {  /* só ajusta se erro > 1 dB */
+    if (fabsf(error_db) > 0.5f) {  /* was 1.0 - more sensitive adjustment */
         float rx_db = linear_to_db(audio->rx_gain);
         float gain_db_step = 4.0f * agc->loop_bw * error_db;
         float new_rx_db = rx_db + gain_db_step;
@@ -338,7 +338,7 @@ static int agc_check_silence(AGCState *agc, AudioState *audio, uint64_t d_sync, 
     if (d_sync == 0 && d_pkts == 0 && rms < agc->rms_min) {
         if (audio->rx_gain < db_to_linear(agc->rx_gain_db_max)) {
             float rx_db = linear_to_db(audio->rx_gain);
-            float new_rx_db = rx_db + 3.0f;
+            float new_rx_db = rx_db + 4.0f;  /* was +3 */
             if (new_rx_db > agc->rx_gain_db_max) new_rx_db = agc->rx_gain_db_max;
             float new_rx = db_to_linear(new_rx_db);
             agc_apply_gains(audio, audio->tx_gain, new_rx);
@@ -349,7 +349,7 @@ static int agc_check_silence(AGCState *agc, AudioState *audio, uint64_t d_sync, 
         }
         if (audio->tx_gain < db_to_linear(agc->tx_gain_db_max)) {
             float tx_db = linear_to_db(audio->tx_gain);
-            float new_tx_db = tx_db + 1.5f;
+            float new_tx_db = tx_db + 2.0f;  /* was +1.5 */
             if (new_tx_db > agc->tx_gain_db_max) new_tx_db = agc->tx_gain_db_max;
             float new_tx = db_to_linear(new_tx_db);
             agc_apply_gains(audio, new_tx, audio->rx_gain);

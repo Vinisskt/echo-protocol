@@ -18,7 +18,7 @@
 #define SYNC_WORD     0x930B51DE
 #endif
 #ifndef PREAMBLE
-#define PREAMBLE      0xAAAA
+#define PREAMBLE      0xAAAAAAAA
 #endif
 
 typedef struct StateFSK_s {

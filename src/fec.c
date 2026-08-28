@@ -219,8 +219,8 @@ static void fec_deinterleave(const uint8_t *in, int nblocks, int block_size,
 
 int fec_ecc_bytes(int data_len) {
     if (data_len < 4) return 2;
-    int e = data_len / 5;  /* 20% parity (was 60%) */
-    return e < 4 ? 4 : e;  /* min 4 ecc bytes (was 6) */
+    int e = data_len / 4;  /* 25% parity (was 20%) - more robust for acoustic channel */
+    return e < 6 ? 6 : e;  /* min 6 ecc bytes (was 4) */
 }
 
 int fec_encoded_len(int data_len) {

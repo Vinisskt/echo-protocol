@@ -24,7 +24,5 @@ typedef struct StateAFSK_s {
 
 void pre_calc_afsk(StateAFSK *state);
 float generate_afsk(StateAFSK *state, uint8_t *bit);
-void push_preamble(Buffer *buf); 
-void push_sync_word(Buffer *buf);
 
 #endif // MOD_AFSK_H

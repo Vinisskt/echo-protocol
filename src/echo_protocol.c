@@ -108,7 +108,7 @@ void tun_to_rb(EchoProtocol *echo) {
 
     /* Force raw packet every N packets to resync ROHC context on RX (U-mode) */
     static int tx_raw_counter = 0;
-    if (++tx_raw_counter >= 100) {
+    if (++tx_raw_counter >= 50) {  /* was 100 - more frequent ROHC resync for stability */
         tx_raw_counter = 0;
         comp_flag = 0;
         rohc_flag = 0;
