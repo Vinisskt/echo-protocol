@@ -11,6 +11,19 @@
 #define SYMBOL_RATE   1500
 #define SAMPLES_PER_SYMBOL (SAMPLE_RATE / SYMBOL_RATE)
 
+/* Set B: validadores de janela longa (64 amostras = 2 símbolos) */
+#define SAMPLES_LONG_WINDOW (SAMPLES_PER_SYMBOL * 2)
+
+/* Set C: frequências dos monitores de banda (ruído broadband) */
+#define FREQ_MON_LOW    1000
+#define FREQ_MON_MID    1500
+#define FREQ_MON_HIGH   6000
+#define NUM_FREQ_MON    3
+
+/* Thresholds de validação */
+#define VAL_RATIO_THRESHOLD     0.3f   /* mag_valid/mag_main < 30% = confirmado */
+#define NOISE_ENERGY_THRESHOLD  0.5f   /* mag_mon/mag_main < 50% = sem ruído */
+
 #ifndef SAMPLE_RATE
 #define SAMPLE_RATE   48000
 #endif

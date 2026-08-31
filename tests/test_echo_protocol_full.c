@@ -142,7 +142,15 @@ void test_audio_to_rb_sample_count() {
     uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
     for (int i = 0; i < 4; i++) {
         pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+        pre_calc_goertzel_long(&echo.freq_valid[i], &freqs[i]);
     }
+    uint16_t mon_freqs[NUM_FREQ_MON] = {FREQ_MON_LOW, FREQ_MON_MID, FREQ_MON_HIGH};
+    for (int i = 0; i < NUM_FREQ_MON; i++) {
+        pre_calc_goertzel(&echo.freq_mon[i], &mon_freqs[i]);
+    }
+    echo.pending_candidate = -1;
+    echo.block_counter = 0;
+    echo.long_samples_count = 0;
     float sample = 0.5f;
     for (int i = 0; i < SAMPLES_PER_SYMBOL - 1; i++) {
         audio_to_rb(&echo, &sample);
@@ -168,7 +176,15 @@ void test_audio_to_rb_demodulates_mark_as_1() {
     uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
     for (int i = 0; i < 4; i++) {
         pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+        pre_calc_goertzel_long(&echo.freq_valid[i], &freqs[i]);
     }
+    uint16_t mon_freqs[NUM_FREQ_MON] = {FREQ_MON_LOW, FREQ_MON_MID, FREQ_MON_HIGH};
+    for (int i = 0; i < NUM_FREQ_MON; i++) {
+        pre_calc_goertzel(&echo.freq_mon[i], &mon_freqs[i]);
+    }
+    echo.pending_candidate = -1;
+    echo.block_counter = 0;
+    echo.long_samples_count = 0;
     float step = 2.0f * (float)M_PI * FREQ_11 / SAMPLE_RATE;
     for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
         float sample = sinf(i * step);
@@ -195,7 +211,15 @@ void test_audio_to_rb_demodulates_space_as_0() {
     uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
     for (int i = 0; i < 4; i++) {
         pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+        pre_calc_goertzel_long(&echo.freq_valid[i], &freqs[i]);
     }
+    uint16_t mon_freqs[NUM_FREQ_MON] = {FREQ_MON_LOW, FREQ_MON_MID, FREQ_MON_HIGH};
+    for (int i = 0; i < NUM_FREQ_MON; i++) {
+        pre_calc_goertzel(&echo.freq_mon[i], &mon_freqs[i]);
+    }
+    echo.pending_candidate = -1;
+    echo.block_counter = 0;
+    echo.long_samples_count = 0;
     float step = 2.0f * (float)M_PI * FREQ_00 / SAMPLE_RATE;
     for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
         float sample = sinf(i * step);
@@ -413,7 +437,15 @@ void test_rx_state_machine_searching_to_data() {
     uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
     for (int i = 0; i < 4; i++) {
         pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+        pre_calc_goertzel_long(&echo.freq_valid[i], &freqs[i]);
     }
+    uint16_t mon_freqs[NUM_FREQ_MON] = {FREQ_MON_LOW, FREQ_MON_MID, FREQ_MON_HIGH};
+    for (int i = 0; i < NUM_FREQ_MON; i++) {
+        pre_calc_goertzel(&echo.freq_mon[i], &mon_freqs[i]);
+    }
+    echo.pending_candidate = -1;
+    echo.block_counter = 0;
+    echo.long_samples_count = 0;
     for (int s = 0; s < 16; s++) {
         int shift = 30 - s * 2;
         uint8_t b0 = (SYNC_WORD >> (shift + 1)) & 1;
@@ -677,6 +709,251 @@ void test_rb_to_tun_multiple_packets() {
     close(pipefd[0]); close(pipefd[1]); free(echo.rx_rb);
 }
 
+/* === Set B validation pipeline tests === */
+
+void test_goertzel_buffer_long_detects_frequency() {
+    TEST("process_goertzel_buffer_long detects correct frequency from 64-sample buffer");
+    StateGoertzelLong states[4];
+    uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel_long(&states[i], &freqs[i]);
+    }
+
+    /* Fill buffer with64 samples of FREQ_10 (4000Hz, index 2) */
+    float buf[SAMPLES_LONG_WINDOW];
+    float step = 2.0f * (float)M_PI * FREQ_10 / SAMPLE_RATE;
+    for (int i = 0; i < SAMPLES_LONG_WINDOW; i++) {
+        buf[i] = sinf(i * step);
+    }
+
+    float mag_b[4];
+    for (int i = 0; i < 4; i++) {
+        mag_b[i] = process_goertzel_buffer_long(&states[i], buf, SAMPLES_LONG_WINDOW);
+    }
+
+    int max_idx = 0;
+    for (int i = 1; i < 4; i++) {
+        if (mag_b[i] > mag_b[max_idx]) max_idx = i;
+    }
+
+    if (max_idx != 2) { FAIL("expected FREQ_10 (index 2)"); return; }
+    PASS();
+}
+
+void test_audio_to_rb_long_samples_count_increments() {
+    TEST("audio_to_rb increments long_samples_count each sample");
+    EchoProtocol echo;
+    memset(&echo, 0, sizeof(echo));
+    echo.rx_rb = rb_init();
+    echo.rx.state = DATA;
+    echo.rx.rx_sample_count = 0;
+    echo.rx.last_rx_time = (uint32_t)time(NULL);
+    uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+        pre_calc_goertzel_long(&echo.freq_valid[i], &freqs[i]);
+    }
+    echo.pending_candidate = -1;
+    echo.block_counter = 0;
+    echo.long_samples_count = 0;
+
+    float sample = 0.5f;
+    for (int i = 0; i < 10; i++) {
+        audio_to_rb(&echo, &sample);
+    }
+    /* long_samples_count increments every sample (including non-symbol-boundary) */
+    if (echo.long_samples_count != 10) {
+        FAIL("long_samples_count should be 10 after 10 samples");
+        free(echo.rx_rb); return;
+    }
+    PASS();
+    free(echo.rx_rb);
+}
+
+void test_audio_to_rb_long_samples_count_resets_after_validation() {
+    TEST("audio_to_rb resets long_samples_count to 0 after Set B validation at 64");
+    EchoProtocol echo;
+    memset(&echo, 0, sizeof(echo));
+    echo.rx_rb = rb_init();
+    echo.rx.state = DATA;
+    echo.rx.rx_sample_count = 0;
+    echo.rx.last_rx_time = (uint32_t)time(NULL);
+    uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+        pre_calc_goertzel_long(&echo.freq_valid[i], &freqs[i]);
+    }
+    echo.pending_candidate = -1;
+    echo.block_counter = 0;
+    echo.long_samples_count = 0;
+
+    /* Feed64 samples of FREQ_00 to trigger validation */
+    float step = 2.0f * (float)M_PI * FREQ_00 / SAMPLE_RATE;
+    for (int i = 0; i < SAMPLES_LONG_WINDOW; i++) {
+        float sample = sinf(i * step);
+        audio_to_rb(&echo, &sample);
+    }
+
+    /* After64 samples: validation ran, counter should be reset */
+    if (echo.long_samples_count != 0) {
+        FAIL("long_samples_count should be 0 after validation");
+        free(echo.rx_rb); return;
+    }
+    /* long_buf_idx should also be reset */
+    if (echo.long_buf_idx[0] != 0) {
+        FAIL("long_buf_idx should be 0 after validation");
+        free(echo.rx_rb); return;
+    }
+    PASS();
+    free(echo.rx_rb);
+}
+
+void test_audio_to_rb_no_validation_before_64_samples() {
+    TEST("audio_to_rb does not run Set B validation before 64 samples accumulated");
+    EchoProtocol echo;
+    memset(&echo, 0, sizeof(echo));
+    echo.rx_rb = rb_init();
+    echo.rx.state = DATA;
+    echo.rx.rx_sample_count = 0;
+    echo.rx.last_rx_time = (uint32_t)time(NULL);
+    uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+        pre_calc_goertzel_long(&echo.freq_valid[i], &freqs[i]);
+    }
+    echo.pending_candidate = -1;
+    echo.block_counter = 0;
+    echo.long_samples_count = 0;
+    echo.stats.val_failures = 0;
+
+    /* Feed32 samples (1 symbol) — validation should NOT run */
+    float step = 2.0f * (float)M_PI * FREQ_00 / SAMPLE_RATE;
+    for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
+        float sample = sinf(i * step);
+        audio_to_rb(&echo, &sample);
+    }
+
+    if (echo.stats.val_failures != 0) {
+        FAIL("val_failures should be 0 before 64 samples");
+        free(echo.rx_rb); return;
+    }
+    if (echo.long_samples_count != SAMPLES_PER_SYMBOL) {
+        FAIL("long_samples_count should be 32 after 1 symbol");
+        free(echo.rx_rb); return;
+    }
+    PASS();
+    free(echo.rx_rb);
+}
+
+void test_audio_to_rb_val_failures_increments_on_mismatch() {
+    TEST("audio_to_rb increments val_failures when Set B disagrees with pending_candidate");
+    EchoProtocol echo;
+    memset(&echo, 0, sizeof(echo));
+    echo.rx_rb = rb_init();
+    echo.rx.state = DATA;
+    echo.rx.rx_sample_count = 0;
+    echo.rx.last_rx_time = (uint32_t)time(NULL);
+    uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+        pre_calc_goertzel_long(&echo.freq_valid[i], &freqs[i]);
+    }
+    echo.pending_candidate = -1;
+    echo.block_counter = 0;
+    echo.long_samples_count = 0;
+    echo.stats.val_failures = 0;
+
+    /* Feed64 samples of FREQ_00 → triggers validation 1 at end.
+       pending_candidate becomes 0. Buffer is pure FREQ_00. Match. */
+    float step0 = 2.0f * (float)M_PI * FREQ_00 / SAMPLE_RATE;
+    for (int i = 0; i < SAMPLES_LONG_WINDOW; i++) {
+        float sample = sinf(i * step0);
+        audio_to_rb(&echo, &sample);
+    }
+    if (echo.stats.val_failures != 0) {
+        FAIL("val_failures should be 0 after pure FREQ_00 validation");
+        free(echo.rx_rb); return;
+    }
+
+    /* Now feed32 samples of FREQ_11 (symbol 2).
+       pending_candidate = 3. long_samples_count = 32. No validation. */
+    float step11 = 2.0f * (float)M_PI * FREQ_11 / SAMPLE_RATE;
+    for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
+        float sample = sinf(i * step11);
+        audio_to_rb(&echo, &sample);
+    }
+    if (echo.stats.val_failures != 0) {
+        FAIL("val_failures should be 0 before second validation");
+        free(echo.rx_rb); return;
+    }
+    if (echo.pending_candidate != 3) {
+        FAIL("pending_candidate should be 3 after FREQ_11");
+        free(echo.rx_rb); return;
+    }
+
+    /* Force pending_candidate to wrong value (simulating Set A error) */
+    echo.pending_candidate = 0;
+
+    /* Feed32 more samples of FREQ_11 (symbol 3).
+       long_samples_count = 64 → validation 2 runs.
+       Buffer has 64 samples of FREQ_11 (symbols 2+3).
+       Set B detects 3. pending_candidate forced to 0. MISMATCH! */
+    for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
+        float sample = sinf(i * step11);
+        audio_to_rb(&echo, &sample);
+    }
+
+    if (echo.stats.val_failures != 1) {
+        FAIL("val_failures should be 1 after forced mismatch");
+        free(echo.rx_rb); return;
+    }
+    PASS();
+    free(echo.rx_rb);
+}
+
+void test_audio_to_rb_pending_candidate_set_per_symbol() {
+    TEST("audio_to_rb updates pending_candidate to current symbol each time");
+    EchoProtocol echo;
+    memset(&echo, 0, sizeof(echo));
+    echo.rx_rb = rb_init();
+    echo.rx.state = DATA;
+    echo.rx.rx_sample_count = 0;
+    echo.rx.last_rx_time = (uint32_t)time(NULL);
+    uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel(&echo.freq_states[i], &freqs[i]);
+        pre_calc_goertzel_long(&echo.freq_valid[i], &freqs[i]);
+    }
+    echo.pending_candidate = -1;
+    echo.block_counter = 0;
+    echo.long_samples_count = 0;
+
+    /* Symbol 0: FREQ_10 (index 2) */
+    float step2 = 2.0f * (float)M_PI * FREQ_10 / SAMPLE_RATE;
+    for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
+        float sample = sinf(i * step2);
+        audio_to_rb(&echo, &sample);
+    }
+    if (echo.pending_candidate != 2) {
+        FAIL("pending_candidate should be 2 after FREQ_10 symbol");
+        free(echo.rx_rb); return;
+    }
+
+    /* Symbol 1: FREQ_01 (index 1) */
+    float step1 = 2.0f * (float)M_PI * FREQ_01 / SAMPLE_RATE;
+    for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
+        float sample = sinf(i * step1);
+        audio_to_rb(&echo, &sample);
+    }
+    if (echo.pending_candidate != 1) {
+        FAIL("pending_candidate should be 1 after FREQ_01 symbol");
+        free(echo.rx_rb); return;
+    }
+
+    PASS();
+    free(echo.rx_rb);
+}
+
 int main() {
     printf("=== Complete Tests: Echo Protocol ===\n\n");
 
@@ -694,6 +971,14 @@ int main() {
     test_audio_to_rb_sample_count();
     test_audio_to_rb_demodulates_mark_as_1();
     test_audio_to_rb_demodulates_space_as_0();
+
+    printf("\n[Set B validation pipeline]\n");
+    test_goertzel_buffer_long_detects_frequency();
+    test_audio_to_rb_long_samples_count_increments();
+    test_audio_to_rb_long_samples_count_resets_after_validation();
+    test_audio_to_rb_no_validation_before_64_samples();
+    test_audio_to_rb_val_failures_increments_on_mismatch();
+    test_audio_to_rb_pending_candidate_set_per_symbol();
 
     printf("\n[rx state machine]\n");
     test_rx_state_machine_searching_to_data();

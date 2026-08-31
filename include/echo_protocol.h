@@ -47,6 +47,8 @@ typedef struct {
     uint64_t rx_corrupted;
     uint64_t rx_sync_found;
     uint64_t rx_timeouts;
+    uint64_t val_failures;
+    uint64_t noise_rejects;
 } ProtocolStats;
 
 typedef struct EchoProtocol_s {
@@ -54,7 +56,24 @@ typedef struct EchoProtocol_s {
     Buffer *tx_rb;
     Buffer *rx_rb;
     StateFSK mod_state;
+
+    /* Set A: 4 filtros principais (32 amostras, curta janela) */
     StateGoertzel freq_states[4];
+
+    /* Set B: 4 filtros validadores (64 amostras, longa janela) */
+    StateGoertzelLong freq_valid[4];
+    float long_window_buf[4][SAMPLES_LONG_WINDOW];
+    int long_buf_idx[4];
+
+    /* Set C: 3 monitores de banda (32 amostras, ruído broadband) */
+    StateGoertzel freq_mon[NUM_FREQ_MON];
+
+    /* Pipeline de decisão */
+    int pending_candidate;           /* -1 = nenhum, 0..3 = idx aguardando validação */
+    uint8_t pending_bits[2];         /* bits do candidato aguardando */
+    int block_counter;               /* par/ímpar para timing do Set B */
+    int long_samples_count;          /* amostras acumuladas na janela longa (0..64) */
+
     RxState rx;
     TxState tx;
     ROHCState rohc_tx;

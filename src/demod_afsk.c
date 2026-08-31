@@ -96,3 +96,69 @@ void reset_state(StateGoertzel *state) {
     state->buf_idx = 0;
     state->last_mag = 0.0f;
 }
+
+/* --- Goertzel de janela longa (64 amostras) — Set B de validação --- */
+
+static void init_hamming_window_long(StateGoertzelLong *state) {
+    for (int i = 0; i < state->n; i++) {
+        state->hamming[i] = 0.54f - 0.46f * cosf(2.0f * M_PI * i / (state->n - 1));
+    }
+}
+
+void pre_calc_goertzel_long(StateGoertzelLong *state, uint16_t *freq) {
+    state->n = SAMPLES_LONG_WINDOW;
+    state->k = ((float)state->n * *freq) / SAMPLE_RATE;
+    state->omega = (2.0f * M_PI * state->k) / state->n;
+    state->coeff = 2.0f * cosf(state->omega);
+    state->q1 = 0.0f;
+    state->q2 = 0.0f;
+    state->buf_idx = 0;
+    state->last_mag = 0.0f;
+    init_hamming_window_long(state);
+}
+
+float process_goertzel_windowed_long(StateGoertzelLong *state, float *sample) {
+    state->window_buf[state->buf_idx] = *sample * state->hamming[state->buf_idx];
+    state->buf_idx++;
+
+    if (state->buf_idx < state->n) {
+        return state->last_mag;
+    }
+
+    float q1 = 0.0f;
+    float q2 = 0.0f;
+    for (int i = 0; i < state->n; i++) {
+        float q0 = state->window_buf[i] + (state->coeff * q1) - q2;
+        q2 = q1;
+        q1 = q0;
+    }
+
+    float mag = (q1 * q1) + (q2 * q2) - (q1 * q2 * state->coeff);
+    state->last_mag = mag;
+
+    state->buf_idx = 0;
+    return mag;
+}
+
+void reset_state_long(StateGoertzelLong *state) {
+    state->q1 = 0.0f;
+    state->q2 = 0.0f;
+    state->buf_idx = 0;
+    state->last_mag = 0.0f;
+}
+
+/* Processa buffer completo de64 amostras de uma vez (para Set B no pipeline).
+   Aplica janela Hamming + Goertzel no bloco inteiro. Retorna magnitude. */
+float process_goertzel_buffer_long(StateGoertzelLong *state, const float *buf, int len) {
+    float q1 = 0.0f;
+    float q2 = 0.0f;
+    for (int i = 0; i < len; i++) {
+        float windowed = buf[i] * state->hamming[i];
+        float q0 = windowed + (state->coeff * q1) - q2;
+        q2 = q1;
+        q1 = q0;
+    }
+    float mag = (q1 * q1) + (q2 * q2) - (q1 * q2 * state->coeff);
+    state->last_mag = mag;
+    return mag;
+}

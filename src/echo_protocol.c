@@ -26,10 +26,31 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
 
     pre_calc_fsk(&echo->mod_state);
 
+    /* Set A: filtros principais (32 amostras) */
     uint16_t freqs[4] = {FREQ_00, FREQ_01, FREQ_10, FREQ_11};
     for (int i = 0; i < 4; i++) {
         pre_calc_goertzel(&echo->freq_states[i], &freqs[i]);
     }
+
+    /* Set B: filtros validadores (64 amostras, mesmas frequências) */
+    for (int i = 0; i < 4; i++) {
+        pre_calc_goertzel_long(&echo->freq_valid[i], &freqs[i]);
+    }
+    for (int i = 0; i < 4; i++) {
+        echo->long_buf_idx[i] = 0;
+        memset(echo->long_window_buf[i], 0, sizeof(echo->long_window_buf[i]));
+    }
+
+    /* Set C: monitores de banda (ruído broadband) */
+    uint16_t mon_freqs[NUM_FREQ_MON] = {FREQ_MON_LOW, FREQ_MON_MID, FREQ_MON_HIGH};
+    for (int i = 0; i < NUM_FREQ_MON; i++) {
+        pre_calc_goertzel(&echo->freq_mon[i], &mon_freqs[i]);
+    }
+
+    /* Pipeline de decisão */
+    echo->pending_candidate = -1;
+    echo->block_counter = 0;
+    echo->long_samples_count = 0;
 
     echo->rx.state = SEARCHING;
     echo->rx.sync_accumulator = 0;
@@ -215,29 +236,76 @@ static void process_rx_bit(EchoProtocol *echo, uint8_t bit) {
 }
 
 void audio_to_rb(EchoProtocol *echo, float *sample) {
-    float mag[4];
+    /* === SET A: filtros principais (32 amostras, curta janela) === */
+    float mag_a[4];
     for (int i = 0; i < 4; i++) {
-        mag[i] = process_goertzel_windowed(&echo->freq_states[i], sample);
+        mag_a[i] = process_goertzel_windowed(&echo->freq_states[i], sample);
     }
 
+    /* === SET B: acumular em buffer de janela longa (64 amostras) === */
+    for (int i = 0; i < 4; i++) {
+        int idx = echo->long_buf_idx[i];
+        echo->long_window_buf[i][idx] = *sample;
+        echo->long_buf_idx[i] = idx + 1;
+    }
+
+    /* === DECISÃO: a cada 32 amostras (final de símbolo) === */
+    echo->long_samples_count++;
     if (++echo->rx.rx_sample_count < SAMPLES_PER_SYMBOL) {
         return;
     }
 
+    /* --- Set A: escolher candidato (max magnitude) --- */
     int max_idx = 0;
     for (int i = 1; i < 4; i++) {
-        if (mag[i] > mag[max_idx]) max_idx = i;
+        if (mag_a[i] > mag_a[max_idx]) max_idx = i;
     }
 
     uint8_t bits[2];
     bits[0] = (max_idx >> 1) & 1;
     bits[1] = max_idx & 1;
 
+    /* --- Validar candidato ANTERIOR quando Set B tem 64 amostras --- */
+    if (echo->long_samples_count >= SAMPLES_LONG_WINDOW) {
+        /* Set B: processar buffer de 64 amostras com Goertzel longo (2x resolução) */
+        float mag_b[4];
+        for (int i = 0; i < 4; i++) {
+            mag_b[i] = process_goertzel_buffer_long(&echo->freq_valid[i],
+                       echo->long_window_buf[i], SAMPLES_LONG_WINDOW);
+        }
+
+        /* Set B decide independentemente (2x resolução de frequência) */
+        int b_idx = 0;
+        for (int i = 1; i < 4; i++) {
+            if (mag_b[i] > mag_b[b_idx]) b_idx = i;
+        }
+
+        /* Comparar decisão do Set B com candidato pendente do Set A (símbolo anterior) */
+        if (echo->pending_candidate >= 0 && b_idx != echo->pending_candidate) {
+            /* Set B discorda: registrar falha de validação */
+            echo->stats.val_failures++;
+        }
+
+        /* Limpar buffers de Set B e contador */
+        for (int i = 0; i < 4; i++) {
+            echo->long_buf_idx[i] = 0;
+        }
+        echo->long_samples_count = 0;
+    }
+
+    /* --- Guardar candidato para validação futura (depois da validação) --- */
+    echo->pending_candidate = max_idx;
+    echo->pending_bits[0] = bits[0];
+    echo->pending_bits[1] = bits[1];
+
+    /* --- Reset Set A para próximo símbolo --- */
     for (int i = 0; i < 4; i++) {
         reset_state(&echo->freq_states[i]);
     }
     echo->rx.rx_sample_count = 0;
+    echo->block_counter++;
 
+    /* --- Output: bits do Set A --- */
     process_rx_bit(echo, bits[0]);
     process_rx_bit(echo, bits[1]);
 }
