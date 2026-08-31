@@ -14,7 +14,7 @@ typedef struct AGCState AGCState;
 
 #define SIZE_BUF 2048
 #define SIZE_BYTE 8
-#define MAX_TX_FRAME_BYTES 1024
+#define MAX_TX_FRAME_BYTES 2048
 
 typedef enum {
     SEARCHING,
