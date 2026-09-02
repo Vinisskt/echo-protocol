@@ -14,7 +14,7 @@
 
 #define FEC_GF_POLY         0x11D
 #define FEC_RS_MAX_N        255
-#define FEC_RS_MSGBLK       200
+#define FEC_RS_MSGBLK       100
 #define FEC_RS_PARITY_BLK   55
 #define FEC_CRC_BYTES       4
 #define FEC_LEN_BYTES       2
