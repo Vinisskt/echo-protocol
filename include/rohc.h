@@ -22,7 +22,6 @@ typedef struct {
 void     rohc_init(ROHCState *state);
 int      rohc_compress(ROHCState *state, uint8_t *packet, int packet_len, uint8_t *out, int out_len);
 int      rohc_decompress(ROHCState *state, uint8_t *compressed, int comp_len, uint8_t *out, int out_len);
-void     rohc_reset(ROHCState *state);
 void     rohc_sync_context(ROHCState *state, uint8_t *packet, int packet_len);
 uint16_t ip_checksum(uint8_t *header, int len);
 

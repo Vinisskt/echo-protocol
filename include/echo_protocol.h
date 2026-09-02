@@ -88,7 +88,6 @@ int echo_init(EchoProtocol *echo, char *dev_name);
 void echo_close(EchoProtocol *echo);
 void tun_to_rb(EchoProtocol *echo);
 void rb_to_tun(EchoProtocol *echo, int *packet_len);
-void rb_to_audio(EchoProtocol *echo, uint8_t *symbol);
 void audio_to_rb(EchoProtocol *echo, float *sample);
 
 #ifdef ECHO_PROTOCOL_TEST

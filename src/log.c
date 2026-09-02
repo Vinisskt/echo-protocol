@@ -65,30 +65,6 @@ void log_set_console_level(LogLevel level) {
     console_level = level;
 }
 
-void log_set_file(const char *path) {
-    if (!path) return;
-    pthread_mutex_lock(&log_mutex);
-    strncpy(log_path, path, sizeof(log_path) - 1);
-    log_path[sizeof(log_path) - 1] = '\0';
-    if (log_file && log_file != stderr) {
-        fclose(log_file);
-        log_file = fopen(log_path, append_mode ? "a" : "w");
-        if (!log_file) log_file = stderr;
-    }
-    pthread_mutex_unlock(&log_mutex);
-}
-
-void log_set_append(int append) {
-    append_mode = append;
-}
-
-void log_msg(LogLevel level, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    write_log(level, fmt, args);
-    va_end(args);
-}
-
 void log_debug(const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);

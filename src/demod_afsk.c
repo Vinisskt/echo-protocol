@@ -1,5 +1,4 @@
 #include "../include/demod_afsk.h"
-#include "../include/mod_afsk.h"
 #include "../include/mod_fsk.h"
 #include <stdint.h>
 #include <math.h>
@@ -59,14 +58,6 @@ void pre_calc_goertzel(StateGoertzel *state, uint16_t *freq) {
     init_hamming_window(state);
 }
 
-float process_goertzel(StateGoertzel *state, float *sample) {
-    float q0 = *sample + (state->coeff * state->q1) - state->q2;
-    state->q2 = state->q1;
-    state->q1 = q0;
-    
-    return (state->q1 * state->q1) + (state->q2 * state->q2) - (state->q1 * state->q2 * state->coeff);
-}
-
 float process_goertzel_windowed(StateGoertzel *state, float *sample) {
     state->window_buf[state->buf_idx] = *sample * state->hamming[state->buf_idx];
     state->buf_idx++;
@@ -117,38 +108,6 @@ void pre_calc_goertzel_long(StateGoertzelLong *state, uint16_t *freq) {
     init_hamming_window_long(state);
 }
 
-float process_goertzel_windowed_long(StateGoertzelLong *state, float *sample) {
-    state->window_buf[state->buf_idx] = *sample * state->hamming[state->buf_idx];
-    state->buf_idx++;
-
-    if (state->buf_idx < state->n) {
-        return state->last_mag;
-    }
-
-    float q1 = 0.0f;
-    float q2 = 0.0f;
-    for (int i = 0; i < state->n; i++) {
-        float q0 = state->window_buf[i] + (state->coeff * q1) - q2;
-        q2 = q1;
-        q1 = q0;
-    }
-
-    float mag = (q1 * q1) + (q2 * q2) - (q1 * q2 * state->coeff);
-    state->last_mag = mag;
-
-    state->buf_idx = 0;
-    return mag;
-}
-
-void reset_state_long(StateGoertzelLong *state) {
-    state->q1 = 0.0f;
-    state->q2 = 0.0f;
-    state->buf_idx = 0;
-    state->last_mag = 0.0f;
-}
-
-/* Processa buffer completo de64 amostras de uma vez (para Set B no pipeline).
-   Aplica janela Hamming + Goertzel no bloco inteiro. Retorna magnitude. */
 float process_goertzel_buffer_long(StateGoertzelLong *state, const float *buf, int len) {
     float q1 = 0.0f;
     float q2 = 0.0f;

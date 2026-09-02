@@ -9,10 +9,6 @@
 
 static uint8_t current_tx_symbol = 0;
 
-/* Static buffers to avoid stack overflow in real-time callback */
-static float mag_static[4];
-static uint8_t bits_static[2];
-
 static int paCallback(const void *inputBuffer, void *outputBuffer,
                       unsigned long framesPerBuffer,
                       const PaStreamCallbackTimeInfo* timeInfo,

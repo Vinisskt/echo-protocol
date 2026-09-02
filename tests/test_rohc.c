@@ -220,17 +220,6 @@ void test_rohc_compress_too_short_rejected() {
     PASS();
 }
 
-void test_rohc_reset_clears_state() {
-    TEST("rohc_reset clears context_valid");
-    ROHCState state;
-    rohc_init(&state);
-    state.context_valid = 1;
-    state.context[0] = 0x45;
-    rohc_reset(&state);
-    if (state.context_valid != 0) { FAIL("context_valid should be 0"); return; }
-    PASS();
-}
-
 void test_rohc_roundtrip_ttl_change() {
     TEST("ROHC roundtrip with TTL change reconstructs correctly");
     ROHCState send, recv;
@@ -529,9 +518,8 @@ void test_rohc_sync_context_ignores_short_packets() {
 int main() {
     printf("=== ROHC Unit Tests ===\n\n");
 
-    printf("[init/reset]\n");
+    printf("[init]\n");
     test_rohc_init_clears_state();
-    test_rohc_reset_clears_state();
 
     printf("\n[compress]\n");
     test_rohc_compress_creates_context_first_packet();

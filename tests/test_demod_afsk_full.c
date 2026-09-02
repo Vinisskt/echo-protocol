@@ -5,7 +5,6 @@
 #include <string.h>
 #include <math.h>
 #include "../include/demod_afsk.h"
-#include "../include/mod_afsk.h"
 #include "../include/mod_fsk.h"
 
 static int tests_passed = 0;
@@ -19,9 +18,9 @@ static int tests_failed = 0;
 void test_pre_calc_goertzel_coefficient() {
     TEST("pre_calc_goertzel calculates coeff and omega correctly");
     StateGoertzel state;
-    uint16_t freq = FREQ_MARK;
+    uint16_t freq = FREQ_00;
     pre_calc_goertzel(&state, &freq);
-    float expected_k = ((float)SAMPLES_PER_SYMBOL * FREQ_MARK) / SAMPLE_RATE;
+    float expected_k = ((float)SAMPLES_PER_SYMBOL * FREQ_00) / SAMPLE_RATE;
     float expected_omega = (2.0f * (float)M_PI * expected_k) / SAMPLES_PER_SYMBOL;
     float expected_coeff = 2.0f * cosf(expected_omega);
     if (fabsf(state.k - expected_k) > 0.01f) { FAIL("k incorrect"); return; }
@@ -31,9 +30,9 @@ void test_pre_calc_goertzel_coefficient() {
 }
 
 void test_pre_calc_goertzel_different_frequencies() {
-    TEST("pre_calc_goertzel produces different coeff for FREQ_SPACE");
+    TEST("pre_calc_goertzel produces different coeff for FREQ_01");
     StateGoertzel state_mark, state_space;
-    uint16_t f_m = FREQ_MARK, f_s = FREQ_SPACE;
+    uint16_t f_m = FREQ_00, f_s = FREQ_01;
     pre_calc_goertzel(&state_mark, &f_m);
     pre_calc_goertzel(&state_space, &f_s);
     if (fabsf(state_mark.coeff - state_space.coeff) < 0.001f) {
@@ -46,76 +45,18 @@ void test_pre_calc_goertzel_different_frequencies() {
 void test_pre_calc_goertzel_initial_zero_state() {
     TEST("pre_calc_goertzel initializes q1=0, q2=0");
     StateGoertzel state;
-    uint16_t freq = FREQ_MARK;
+    uint16_t freq = FREQ_00;
     pre_calc_goertzel(&state, &freq);
     if (fabsf(state.q1) > EPSILON) { FAIL("q1 != 0"); return; }
     if (fabsf(state.q2) > EPSILON) { FAIL("q2 != 0"); return; }
     PASS();
 }
 
-void test_process_goertzel_positive_magnitude() {
-    TEST("process_goertzel returns magnitude >= 0");
-    StateGoertzel state;
-    uint16_t freq = FREQ_MARK;
-    pre_calc_goertzel(&state, &freq);
-    for (int i = 0; i < SAMPLES_PER_BIT; i++) {
-        float sample = sinf(2.0f * (float)M_PI * FREQ_MARK * i / SAMPLE_RATE);
-        float mag = process_goertzel(&state, &sample);
-        if (mag < 0 && fabsf(mag) > EPSILON) {
-            FAIL("negative magnitude");
-            return;
-        }
-    }
-    PASS();
-}
-
-void test_process_goertzel_mark_greater_than_space_for_mark_signal() {
-    TEST("process_goertzel: magnitude MARK > SPACE for MARK signal");
-    StateGoertzel space, mark;
-    uint16_t f_s = FREQ_SPACE, f_m = FREQ_MARK;
-    pre_calc_goertzel(&space, &f_s);
-    pre_calc_goertzel(&mark, &f_m);
-    for (int i = 0; i < SAMPLES_PER_BIT; i++) {
-        float sample = sinf(2.0f * (float)M_PI * FREQ_MARK * i / SAMPLE_RATE);
-        process_goertzel(&space, &sample);
-        process_goertzel(&mark, &sample);
-    }
-    float mag_s = (space.q1 * space.q1) + (space.q2 * space.q2) - (space.q1 * space.q2 * space.coeff);
-    float mag_m = (mark.q1 * mark.q1) + (mark.q2 * mark.q2) - (mark.q1 * mark.q2 * mark.coeff);
-    if (mag_m <= mag_s) {
-        FAIL("MARK not greater than SPACE for MARK signal");
-        return;
-    }
-    PASS();
-}
-
-void test_process_goertzel_space_greater_than_mark_for_space_signal() {
-    TEST("process_goertzel: magnitude SPACE > MARK for SPACE signal");
-    StateGoertzel space, mark;
-    uint16_t f_s = FREQ_SPACE, f_m = FREQ_MARK;
-    pre_calc_goertzel(&space, &f_s);
-    pre_calc_goertzel(&mark, &f_m);
-    for (int i = 0; i < SAMPLES_PER_BIT; i++) {
-        float sample = sinf(2.0f * (float)M_PI * FREQ_SPACE * i / SAMPLE_RATE);
-        process_goertzel(&space, &sample);
-        process_goertzel(&mark, &sample);
-    }
-    float mag_s = (space.q1 * space.q1) + (space.q2 * space.q2) - (space.q1 * space.q2 * space.coeff);
-    float mag_m = (mark.q1 * mark.q1) + (mark.q2 * mark.q2) - (mark.q1 * mark.q2 * mark.coeff);
-    if (mag_s <= mag_m) {
-        FAIL("SPACE not greater than MARK for SPACE signal");
-        return;
-    }
-    PASS();
-}
-
 void test_reset_state_clears_values() {
     TEST("reset_state clears q1 and q2");
     StateGoertzel state;
-    uint16_t freq = FREQ_MARK;
+    uint16_t freq = FREQ_00;
     pre_calc_goertzel(&state, &freq);
-    float sample = 1.0f;
-    process_goertzel(&state, &sample);
     reset_state(&state);
     if (fabsf(state.q1) > EPSILON) { FAIL("q1 != 0 after reset"); return; }
     if (fabsf(state.q2) > EPSILON) { FAIL("q2 != 0 after reset"); return; }
@@ -125,7 +66,7 @@ void test_reset_state_clears_values() {
 void test_reset_state_multiple_calls() {
     TEST("reset_state can be called multiple times with no side effects");
     StateGoertzel state;
-    uint16_t freq = FREQ_MARK;
+    uint16_t freq = FREQ_00;
     pre_calc_goertzel(&state, &freq);
     reset_state(&state);
     reset_state(&state);
@@ -214,11 +155,6 @@ int main() {
     test_pre_calc_goertzel_coefficient();
     test_pre_calc_goertzel_different_frequencies();
     test_pre_calc_goertzel_initial_zero_state();
-
-    printf("\n[process_goertzel]\n");
-    test_process_goertzel_positive_magnitude();
-    test_process_goertzel_mark_greater_than_space_for_mark_signal();
-    test_process_goertzel_space_greater_than_mark_for_space_signal();
 
     printf("\n[reset_state]\n");
     test_reset_state_clears_values();

@@ -347,10 +347,6 @@ static int rohc_decompress_ipv6(ROHCState *state, uint8_t *compressed, int comp_
     return total_len;
 }
 
-void rohc_reset(ROHCState *state) {
-    state->context_valid = 0;
-}
-
 void rohc_sync_context(ROHCState *state, uint8_t *packet, int packet_len) {
     uint8_t version = packet[0] & 0xF0;
 

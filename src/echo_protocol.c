@@ -163,10 +163,6 @@ void tun_to_rb(EchoProtocol *echo) {
     }
 }
 
-void rb_to_audio(EchoProtocol *echo, uint8_t *symbol) {
-    generate_fsk(&echo->mod_state, symbol);
-}
-
 static void handle_data_state(EchoProtocol *echo, uint8_t bit) {
     // Descrambling (self-synchronizing, recovers after ~17 bits)
     bit = scrambler_process(&echo->rx_scrambler, bit);

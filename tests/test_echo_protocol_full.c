@@ -95,40 +95,6 @@ void test_echo_init_manual_state_config() {
     free(echo.rx_rb);
 }
 
-void test_rb_to_audio_updates_state() {
-    TEST("rb_to_audio updates current_sin and current_cos");
-    EchoProtocol echo;
-    memset(&echo, 0, sizeof(echo));
-    pre_calc_fsk(&echo.mod_state);
-    uint8_t symbol = 1;
-    float sin_before = echo.mod_state.current_sin;
-    float cos_before = echo.mod_state.current_cos;
-    rb_to_audio(&echo, &symbol);
-    if (echo.mod_state.current_sin == sin_before && echo.mod_state.current_cos == cos_before) {
-        FAIL("state did not evolve");
-        return;
-    }
-    PASS();
-}
-
-void test_rb_to_audio_constant_magnitude() {
-    TEST("rb_to_audio maintains magnitude near 1 (sin^2 + cos^2)");
-    EchoProtocol echo;
-    memset(&echo, 0, sizeof(echo));
-    pre_calc_fsk(&echo.mod_state);
-    uint8_t symbol = 1;
-    for (int i = 0; i < SAMPLES_PER_SYMBOL; i++) {
-        rb_to_audio(&echo, &symbol);
-        float mag = echo.mod_state.current_sin * echo.mod_state.current_sin +
-                    echo.mod_state.current_cos * echo.mod_state.current_cos;
-        if (mag < 0.98f || mag > 1.02f) {
-            FAIL("magnitude outside [0.98, 1.02]");
-            return;
-        }
-    }
-    PASS();
-}
-
 void test_audio_to_rb_sample_count() {
     TEST("audio_to_rb produces 2 bits every SAMPLES_PER_SYMBOL calls");
     EchoProtocol echo;
@@ -962,10 +928,6 @@ int main() {
     test_echo_init_manual_state_config();
     test_echo_close_does_not_crash();
     test_echo_close_frees_buffers();
-
-    printf("\n[rb_to_audio]\n");
-    test_rb_to_audio_updates_state();
-    test_rb_to_audio_constant_magnitude();
 
     printf("\n[audio_to_rb]\n");
     test_audio_to_rb_sample_count();
