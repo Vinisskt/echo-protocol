@@ -66,6 +66,9 @@ struct AGCState {
     float hyst_margin;         /* margem da faixa morta (fração, ex: 0.2 = 20%) */
     float beta_attack;         /* taxa de correção para sinal alto */
     float beta_release;        /* taxa de correção para sinal baixo */
+
+    /* Contador de ramp silencioso (limita quantas vezes TX sobe em sequência) */
+    int silence_ramp_count;
 };
 
 typedef struct AGCState AGCState;

@@ -70,6 +70,7 @@ void agc_init(AGCState *agc) {
 
     agc->power_avg   = 0.0f;
     agc->gain_smooth = 1.0f;
+    agc->silence_ramp_count = 0;
 
     const char *e = getenv("ECHO_AGC");
     if (e && strcmp(e, "0") == 0) agc->enabled = 0;
@@ -187,6 +188,7 @@ static void agc_binary_search_iter(AGCState *agc, EchoProtocol *echo,
         agc->best_tx_gain = audio->tx_gain;
         agc->best_rx_gain = audio->rx_gain;
         agc->calib_done   = 1;
+        agc->silence_ramp_count = 0;  /* link voltou, reseta contador */
         return;
     }
 
@@ -405,17 +407,23 @@ static int agc_check_silence(AGCState *agc, AudioState *audio,
             agc->last_adjust = now;
             return 1;
         }
-        if (audio->tx_gain < db_to_linear(agc->tx_gain_db_max)) {
+        /* TX ramp: limitado a 8 passos (12 dB) para não bombardear */
+        if (agc->silence_ramp_count < 8 &&
+            audio->tx_gain < db_to_linear(agc->tx_gain_db_max)) {
             float tx_db     = linear_to_db(audio->tx_gain);
             float new_tx_db = tx_db + 1.5f;
             if (new_tx_db > agc->tx_gain_db_max) new_tx_db = agc->tx_gain_db_max;
             float new_tx = db_to_linear(new_tx_db);
             agc_apply_gains(audio, new_tx, audio->rx_gain);
-            log_info("agc | silencio (rx teto) | tx_gain %.2f→%.2f (%.1f→%.1f dB)",
-                     audio->tx_gain, new_tx, tx_db, new_tx_db);
+            agc->silence_ramp_count++;
+            log_info("agc | silencio (rx teto) | tx_gain %.2f→%.2f (%.1f→%.1f dB) ramp=%d/8",
+                     audio->tx_gain, new_tx, tx_db, new_tx_db, agc->silence_ramp_count);
             agc->last_adjust = now;
             return 1;
         }
+        /* Ramp esgotado: não faz nada, espera link voltar */
+    } else {
+        agc->silence_ramp_count = 0;  /* sinal voltou, reseta */
     }
     return 0;
 }
