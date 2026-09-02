@@ -2,6 +2,7 @@
 #include "../include/audio_io.h"
 #include "../include/log.h"
 #include "../include/agc.h"
+#include "../include/hw_calibrate.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -89,6 +90,14 @@ int main(int argc, char *argv[]) {
         audio_close(&audio);
         echo_close(&echo);
         return 1;
+    }
+
+    /* Auto-calibração: mede noise floor, testa frequências, ajusta AGC */
+    HWCalibration hw;
+    if (hw_calibrate(&audio, &echo, echo.agc, &hw) < 0) {
+        log_warn("hw_calibrate falhou, usando parâmetros padrão");
+    } else {
+        log_info("hardware calibrado com sucesso");
     }
 
     /* Ganho TX ALTO para IR packets (warm-up) — garante que cheguem no peer.
