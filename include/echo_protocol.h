@@ -7,6 +7,7 @@
 #include "demod_afsk.h"
 #include "rohc.h"
 #include "scrambler.h"
+#include "bpfilter.h"
 #include <stdatomic.h>
 
 /* Forward declare para evitar include circular com agc.h */
@@ -80,6 +81,7 @@ typedef struct EchoProtocol_s {
     ROHCState rohc_rx;
     Scrambler tx_scrambler;
     Scrambler rx_scrambler;
+    BandpassBank bp_bank;    /* 4 filtros passa-banda (um por tom FSK) */
     ProtocolStats stats;
     AGCState *agc;
 } EchoProtocol;

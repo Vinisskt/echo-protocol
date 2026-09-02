@@ -114,6 +114,7 @@ void test_audio_to_rb_sample_count() {
     for (int i = 0; i < NUM_FREQ_MON; i++) {
         pre_calc_goertzel(&echo.freq_mon[i], &mon_freqs[i]);
     }
+    bandpass_bank_init(&echo.bp_bank, SAMPLE_RATE, 2000.0f);
     echo.pending_candidate = -1;
     echo.block_counter = 0;
     echo.long_samples_count = 0;
@@ -148,6 +149,7 @@ void test_audio_to_rb_demodulates_mark_as_1() {
     for (int i = 0; i < NUM_FREQ_MON; i++) {
         pre_calc_goertzel(&echo.freq_mon[i], &mon_freqs[i]);
     }
+    bandpass_bank_init(&echo.bp_bank, SAMPLE_RATE, 2000.0f);
     echo.pending_candidate = -1;
     echo.block_counter = 0;
     echo.long_samples_count = 0;
@@ -183,6 +185,7 @@ void test_audio_to_rb_demodulates_space_as_0() {
     for (int i = 0; i < NUM_FREQ_MON; i++) {
         pre_calc_goertzel(&echo.freq_mon[i], &mon_freqs[i]);
     }
+    bandpass_bank_init(&echo.bp_bank, SAMPLE_RATE, 2000.0f);
     echo.pending_candidate = -1;
     echo.block_counter = 0;
     echo.long_samples_count = 0;
@@ -409,6 +412,7 @@ void test_rx_state_machine_searching_to_data() {
     for (int i = 0; i < NUM_FREQ_MON; i++) {
         pre_calc_goertzel(&echo.freq_mon[i], &mon_freqs[i]);
     }
+    bandpass_bank_init(&echo.bp_bank, SAMPLE_RATE, 2000.0f);
     echo.pending_candidate = -1;
     echo.block_counter = 0;
     echo.long_samples_count = 0;
@@ -828,6 +832,7 @@ void test_audio_to_rb_val_failures_increments_on_mismatch() {
     echo.block_counter = 0;
     echo.long_samples_count = 0;
     echo.stats.val_failures = 0;
+    bandpass_bank_init(&echo.bp_bank, SAMPLE_RATE, 2000.0f);
 
     /* Feed64 samples of FREQ_00 → triggers validation 1 at end.
        pending_candidate becomes 0. Buffer is pure FREQ_00. Match. */
@@ -893,6 +898,7 @@ void test_audio_to_rb_pending_candidate_set_per_symbol() {
     echo.pending_candidate = -1;
     echo.block_counter = 0;
     echo.long_samples_count = 0;
+    bandpass_bank_init(&echo.bp_bank, SAMPLE_RATE, 2000.0f);
 
     /* Symbol 0: FREQ_10 (index 2) */
     float step2 = 2.0f * (float)M_PI * FREQ_10 / SAMPLE_RATE;

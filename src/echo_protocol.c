@@ -69,6 +69,9 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
     scrambler_init(&echo->tx_scrambler);
     scrambler_init(&echo->rx_scrambler);
 
+    /* Banco de 4 filtros passa-banda (um por tom FSK) - largura ~500 Hz */
+    bandpass_bank_init(&echo->bp_bank, SAMPLE_RATE, 2000.0f);
+
     echo->agc = calloc(1, sizeof(AGCState));
     if (!echo->agc) return -1;
     agc_init(echo->agc);
@@ -232,16 +235,20 @@ static void process_rx_bit(EchoProtocol *echo, uint8_t bit) {
 }
 
 void audio_to_rb(EchoProtocol *echo, float *sample) {
+    /* === FILTRAGEM: passa-banda por frequência FSK (remove ruído fora de banda) === */
+    float filtered[4];
+    bandpass_bank_process(&echo->bp_bank, *sample, filtered);
+
     /* === SET A: filtros principais (32 amostras, curta janela) === */
     float mag_a[4];
     for (int i = 0; i < 4; i++) {
-        mag_a[i] = process_goertzel_windowed(&echo->freq_states[i], sample);
+        mag_a[i] = process_goertzel_windowed(&echo->freq_states[i], &filtered[i]);
     }
 
     /* === SET B: acumular em buffer de janela longa (64 amostras) === */
     for (int i = 0; i < 4; i++) {
         int idx = echo->long_buf_idx[i];
-        echo->long_window_buf[i][idx] = *sample;
+        echo->long_window_buf[i][idx] = filtered[i];
         echo->long_buf_idx[i] = idx + 1;
     }
 
@@ -318,6 +325,7 @@ static void rx_reset(EchoProtocol *echo) {
     rb_reset(echo->rx_rb);
     scrambler_reset(&echo->rx_scrambler);
     sync_correlator_reset();
+    bandpass_bank_reset(&echo->bp_bank);
 }
 
 /* Check if a length is a valid FEC-encoded length */
