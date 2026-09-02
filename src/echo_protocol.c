@@ -70,7 +70,7 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
     scrambler_init(&echo->rx_scrambler);
 
     /* Banco de 4 filtros passa-banda (um por tom FSK) - largura ~500 Hz */
-    bandpass_bank_init(&echo->bp_bank, SAMPLE_RATE, 2000.0f);
+    bandpass_bank_init(&echo->bp_bank, SAMPLE_RATE, 2600.0f);
 
     echo->agc = calloc(1, sizeof(AGCState));
     if (!echo->agc) return -1;
@@ -305,6 +305,7 @@ void audio_to_rb(EchoProtocol *echo, float *sample) {
     for (int i = 0; i < 4; i++) {
         reset_state(&echo->freq_states[i]);
     }
+    bandpass_bank_reset(&echo->bp_bank);
     echo->rx.rx_sample_count = 0;
     echo->block_counter++;
 

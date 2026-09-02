@@ -8,7 +8,7 @@
 #define FREQ_01       6500
 #define FREQ_10       11000
 #define FREQ_11       15000
-#define SYMBOL_RATE   2000
+#define SYMBOL_RATE   3000
 #define SAMPLES_PER_SYMBOL (SAMPLE_RATE / SYMBOL_RATE)
 
 /* Set B: validadores de janela longa (64 amostras = 2 símbolos) */
