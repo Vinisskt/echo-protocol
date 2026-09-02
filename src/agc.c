@@ -71,6 +71,7 @@ void agc_init(AGCState *agc) {
     agc->power_avg   = 0.0f;
     agc->gain_smooth = 1.0f;
     agc->silence_ramp_count = 0;
+    agc->frozen = 0;
 
     const char *e = getenv("ECHO_AGC");
     if (e && strcmp(e, "0") == 0) agc->enabled = 0;
@@ -295,12 +296,12 @@ static void agc_steady(AGCState *agc, EchoProtocol *echo, AudioState *audio, tim
     if (agc_check_clip(agc, audio, rms, now))
         goto done;
 
+    /* Silêncio: congela ganhos, não ajusta nada */
+    if (agc_check_silence(agc, audio, d_sync, d_pkts, rms, now))
+        goto done;
+
     /* Laço multiplicativo com hysteresis */
     agc_multiplicative_loop(agc, audio, agc->power_avg);
-
-    /* Silêncio: nenhum sinal do peer */
-    if (d_sync == 0 && d_pkts == 0 && rms < agc->rms_min)
-        agc_check_silence(agc, audio, d_sync, d_pkts, rms, now);
 
 done:
     agc->last_adjust = now;
@@ -315,6 +316,7 @@ done:
 static void agc_multiplicative_loop(AGCState *agc, AudioState *audio,
                                     float power) {
     if (power <= 1e-12f) return;
+    if (agc->frozen) return;  /* não ajusta durante silêncio */
 
     float ratio = agc->target_power / power;
 
@@ -396,34 +398,23 @@ static int agc_check_clip(AGCState *agc, AudioState *audio, float rms, time_t no
 static int agc_check_silence(AGCState *agc, AudioState *audio,
                              uint64_t d_sync, uint64_t d_pkts, float rms, time_t now) {
     if (d_sync == 0 && d_pkts == 0 && rms < agc->rms_min) {
-        if (audio->rx_gain < db_to_linear(agc->rx_gain_db_max)) {
-            float rx_db     = linear_to_db(audio->rx_gain);
-            float new_rx_db = rx_db + 3.0f;
-            if (new_rx_db > agc->rx_gain_db_max) new_rx_db = agc->rx_gain_db_max;
-            float new_rx = db_to_linear(new_rx_db);
-            agc_apply_gains(audio, audio->tx_gain, new_rx);
-            log_info("agc | silencio | rms=%.3f | rx_gain %.2f→%.2f (%.1f→%.1f dB)",
-                     rms, audio->rx_gain, new_rx, rx_db, new_rx_db);
-            agc->last_adjust = now;
-            return 1;
+        /* Congela ganhos: não mexe em nada, mantém último valor válido */
+        if (!agc->frozen) {
+            agc->frozen = 1;
+            log_info("agc | silencio | congela gains | rx=%.2f (%.1f dB) tx=%.2f (%.1f dB)",
+                     audio->rx_gain, linear_to_db(audio->rx_gain),
+                     audio->tx_gain, linear_to_db(audio->tx_gain));
         }
-        /* TX ramp: limitado a 8 passos (12 dB) para não bombardear */
-        if (agc->silence_ramp_count < 8 &&
-            audio->tx_gain < db_to_linear(agc->tx_gain_db_max)) {
-            float tx_db     = linear_to_db(audio->tx_gain);
-            float new_tx_db = tx_db + 1.5f;
-            if (new_tx_db > agc->tx_gain_db_max) new_tx_db = agc->tx_gain_db_max;
-            float new_tx = db_to_linear(new_tx_db);
-            agc_apply_gains(audio, new_tx, audio->rx_gain);
-            agc->silence_ramp_count++;
-            log_info("agc | silencio (rx teto) | tx_gain %.2f→%.2f (%.1f→%.1f dB) ramp=%d/8",
-                     audio->tx_gain, new_tx, tx_db, new_tx_db, agc->silence_ramp_count);
-            agc->last_adjust = now;
-            return 1;
-        }
-        /* Ramp esgotado: não faz nada, espera link voltar */
-    } else {
-        agc->silence_ramp_count = 0;  /* sinal voltou, reseta */
+        agc->last_adjust = now;
+        return 1;
+    }
+
+    /* Sinal voltou: descongela */
+    if (agc->frozen) {
+        agc->frozen = 0;
+        log_info("agc | sinal voltou | rx=%.2f (%.1f dB) tx=%.2f (%.1f dB)",
+                 audio->rx_gain, linear_to_db(audio->rx_gain),
+                 audio->tx_gain, linear_to_db(audio->tx_gain));
     }
     return 0;
 }

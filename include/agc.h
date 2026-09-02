@@ -69,6 +69,9 @@ struct AGCState {
 
     /* Contador de ramp silencioso (limita quantas vezes TX sobe em sequência) */
     int silence_ramp_count;
+
+    /* Freeze durante silêncio: congela TX e RX gains */
+    int frozen;
 };
 
 typedef struct AGCState AGCState;

@@ -289,8 +289,8 @@ void test_agc_steady_hysteresis_no_op() {
     PASS();
 }
 
-void test_agc_steady_silence_rx_gain_up() {
-    TEST("steady increases RX gain on silence");
+void test_agc_steady_silence_freezes_gains() {
+    TEST("steady freezes gains during silence");
     AGCState agc;
     agc_init(&agc);
     agc.phase = AGC_STEADY;
@@ -298,29 +298,16 @@ void test_agc_steady_silence_rx_gain_up() {
     agc.settle_secs = 5;
 
     EchoProtocol echo = mock_echo(0, 0, 0);
-    AudioState audio = mock_audio(1.0f, 1.0f, 0.02f);
+    AudioState audio = mock_audio(1.5f, 8.0f, 0.02f);
+
+    float tx_before = audio.tx_gain;
+    float rx_before = audio.rx_gain;
 
     agc_tune(&agc, &echo, &audio);
 
-    if (audio.rx_gain <= 1.0f) { FAIL("RX gain not increased"); return; }
-    PASS();
-}
-
-void test_agc_steady_silence_tx_up_when_rx_maxed() {
-    TEST("steady increases TX gain on silence when RX at max");
-    AGCState agc;
-    agc_init(&agc);
-    agc.phase = AGC_STEADY;
-    agc.last_adjust = time(NULL) - 10;
-    agc.settle_secs = 5;
-    agc.power_avg = 0.01f;
-
-    EchoProtocol echo = mock_echo(0, 0, 0);
-    AudioState audio = mock_audio(0.5f, 16.0f, 0.02f);
-
-    agc_tune(&agc, &echo, &audio);
-
-    if (audio.tx_gain <= 0.5f) { FAIL("TX gain not increased"); return; }
+    if (fabsf(audio.tx_gain - tx_before) > 0.01f) { FAIL("TX gain changed during silence"); return; }
+    if (fabsf(audio.rx_gain - rx_before) > 0.01f) { FAIL("RX gain changed during silence"); return; }
+    if (!agc.frozen) { FAIL("not frozen"); return; }
     PASS();
 }
 
@@ -363,8 +350,7 @@ int main() {
     test_agc_steady_clip_reduction();
     test_agc_steady_multiplicative_low_signal();
     test_agc_steady_hysteresis_no_op();
-    test_agc_steady_silence_rx_gain_up();
-    test_agc_steady_silence_tx_up_when_rx_maxed();
+    test_agc_steady_silence_freezes_gains();
 
     printf("\n[freeze]\n");
     test_agc_freeze_during_tx();
