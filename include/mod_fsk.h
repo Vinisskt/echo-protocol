@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #define FREQ_00       2000
-#define FREQ_01       3000
-#define FREQ_10       4000
-#define FREQ_11       5000
+#define FREQ_01       6500
+#define FREQ_10       11000
+#define FREQ_11       15000
 #define SYMBOL_RATE   2000
 #define SAMPLES_PER_SYMBOL (SAMPLE_RATE / SYMBOL_RATE)
 

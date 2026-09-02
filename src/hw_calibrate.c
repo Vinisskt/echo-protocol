@@ -10,9 +10,9 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-/* Candidatas a frequência FSK (de 2000 a 6000 Hz, espaçamento 500 Hz) */
+/* Candidatas a frequência FSK (de 2000 a 15000 Hz, espaçamento ~1625 Hz) */
 static const float CANDIDATE_FREQS[] = {
-    2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000
+    2000, 3625, 5250, 6875, 8500, 10125, 11750, 13375, 15000
 };
 #define NUM_CANDIDATES 9
 
