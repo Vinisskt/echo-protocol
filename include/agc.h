@@ -14,7 +14,6 @@ typedef enum {
 } AGCPhase;
 
 struct AGCState {
-    uint64_t last_tx_packets;
     uint64_t last_rx_sync;
     uint64_t last_rx_packets;
     uint64_t last_rx_corrupted;
@@ -38,16 +37,35 @@ struct AGCState {
     float power_avg;         /* EMA da potência (RMS²) */
     int enabled;
 
-    /* Calibração rápida (multiplicativo linear, mais rápido para busca inicial) */
+    /* Calibração: busca binária adaptativa */
     AGCPhase phase;
     int calib_secs_elapsed;
-    int calib_tx_gain_step;
-    int calib_rx_gain_step;
+    int calib_done;
+    time_t calib_start_time;
+
+    /* Busca binária — eixo TX */
+    float calib_tx_low;
+    float calib_tx_high;
+    int   calib_tx_iter;
+    int   calib_tx_good;       /* 1 = teste anterior foi bom */
+
+    /* Busca binária — eixo RX */
+    float calib_rx_low;
+    float calib_rx_high;
+    int   calib_rx_iter;
+    int   calib_rx_good;
+
+    /* Melhor combo encontrado */
     float best_rms;
     float best_tx_gain;
     float best_rx_gain;
-    int calib_done;
-    time_t calib_start_time;
+
+    /* Steady-state: laço multiplicativo com hysteresis */
+    float gain_smooth;         /* ganho RX suavizado (linear) */
+    float target_power;        /* target_db convertido para potência linear */
+    float hyst_margin;         /* margem da faixa morta (fração, ex: 0.2 = 20%) */
+    float beta_attack;         /* taxa de correção para sinal alto */
+    float beta_release;        /* taxa de correção para sinal baixo */
 };
 
 typedef struct AGCState AGCState;
