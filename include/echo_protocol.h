@@ -37,7 +37,6 @@ typedef struct {
     atomic_uint_fast8_t packet_ready;
     uint8_t is_compressed;
     uint8_t is_rohc;
-    uint8_t is_fec;
 } RxState;
 
 typedef struct {

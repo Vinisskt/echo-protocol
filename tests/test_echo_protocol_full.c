@@ -9,7 +9,6 @@
 #include <time.h>
 #include <lz4.h>
 #include "../include/echo_protocol.h"
-#include "../include/fec.h"
 #include "../include/scrambler.h"
 
 static int tests_passed = 0;
@@ -224,15 +223,12 @@ void test_tun_to_rb_via_pipe_no_compression() {
     uint8_t rohc_flag = (header >> 14) & 1;
     uint8_t fec_flag = (header >> 13) & 1;
     uint16_t packet_len = header & 0x1FFF;
-    int expected_fec_len = fec_encoded_len(16);
-    if (comp_flag != 0 || rohc_flag != 0 || fec_flag != 1 || packet_len != expected_fec_len) {
-        FAIL("wrong header (expected fec_flag=1, len=%d)", expected_fec_len);
+    if (comp_flag != 0 || rohc_flag != 0 || fec_flag != 0 || packet_len != 16) {
+        FAIL("wrong header (expected no flags, len=16), got fec=%d len=%d", fec_flag, packet_len);
         close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
         return;
     }
-    uint8_t decoded[32];
-    int decoded_len = fec_decode(payload, expected_fec_len, decoded, sizeof(decoded));
-    if (decoded_len != 16 || memcmp(decoded, packet, 16) != 0) { FAIL("FEC payload corrupted"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    if (memcmp(payload, packet, 16) != 0) { FAIL("payload corrupted"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
     PASS();
     close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
 }
@@ -262,10 +258,9 @@ void test_tun_to_rb_with_lz4_compression() {
     /* Compute expected LZ4 size properly */
     uint8_t lz4_buf[192];
     int lz4_size = LZ4_compress_default((const char*)packet, (char*)lz4_buf, sizeof(packet), sizeof(lz4_buf));
-    int fec_total = (lz4_size > 0 && lz4_size < (int)sizeof(packet)) ? fec_encoded_len(lz4_size) : fec_encoded_len(sizeof(packet));
-    
-    if (comp_flag != 1 || rohc_flag != 0 || fec_flag != 1 || packet_len != fec_total) {
-        FAIL("wrong flags for LZ4+FEC: comp=%d rohc=%d fec=%d len=%d expected=%d (lz4_size=%d)", comp_flag, rohc_flag, fec_flag, packet_len, fec_total, lz4_size);
+
+    if (comp_flag != 1 || rohc_flag != 0 || fec_flag != 0 || packet_len != lz4_size) {
+        FAIL("wrong flags for LZ4: comp=%d rohc=%d fec=%d len=%d expected=%d (lz4_size=%d)", comp_flag, rohc_flag, fec_flag, packet_len, lz4_size, lz4_size);
         close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
         return;
     }
@@ -274,7 +269,7 @@ void test_tun_to_rb_with_lz4_compression() {
 }
 
 void test_tun_to_rb_header_16bit_structure() {
-    TEST("tun_to_rb header is 16 bits: 3 flags (comp,rohc,fec) + 13 length bits");
+    TEST("tun_to_rb header is 16 bits: 2 flags (comp,rohc) + 14 length bits");
     int pipefd[2];
     if (pipe(pipefd) == -1) { FAIL("pipe failed"); return; }
     EchoProtocol echo;
@@ -288,8 +283,7 @@ void test_tun_to_rb_header_16bit_structure() {
     tun_to_rb(&echo);
     uint16_t header = read_header_descrambled(echo.tx_rb);
     if (header == 0xFFFF) { FAIL("header incomplete"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-    int fec_total = fec_encoded_len(10);
-    int expected_total_bits = 16 + fec_total * 8;
+    int expected_total_bits = 16 + 10 * 8;
     int total_bits = 0;
     uint8_t bit;
     while (get_bits(echo.tx_rb, &bit)) total_bits++;
@@ -466,9 +460,8 @@ void test_rohc_integration_tun_to_rb_compresses_ip() {
     uint8_t pkt2_fec = (header2 >> 13) & 1;
     uint16_t pkt2_len = header2 & 0x1FFF;
     if (pkt2_rohc != 1) { FAIL("second packet should use ROHC"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-    if (pkt2_fec != 1) { FAIL("second packet should have FEC"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-    int raw_fec_len = fec_encoded_len(28);
-    if (pkt2_len >= raw_fec_len) { FAIL("ROHC+FEC should reduce size below raw+FEC"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    if (pkt2_fec != 0) { FAIL("FEC should be disabled"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    if (pkt2_len >= 28) { FAIL("ROHC should reduce size below raw 28 bytes"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
     PASS();
     close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
 }
@@ -522,7 +515,7 @@ void test_rohc_integration_rb_to_tun_decompresses() {
 }
 
 void test_rohc_integration_header_uses_14bit_length() {
-    TEST("ROHC header uses 13 bits for length (bit 14 = rohc flag, bit 13 = fec flag, mask 0x1FFF)");
+    TEST("ROHC header uses 14 bits for length (bit 15 = comp, bit 14 = rohc, mask 0x1FFF)");
     int pipefd[2];
     if (pipe(pipefd) == -1) { FAIL("pipe failed"); return; }
     EchoProtocol echo;
@@ -554,9 +547,8 @@ void test_rohc_integration_header_uses_14bit_length() {
     uint8_t fec_flag = (header2 >> 13) & 1;
     uint16_t pkt2_len = header2 & 0x1FFF;
     if (rohc_flag != 1) { FAIL("rohc flag not set in second packet"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-    if (fec_flag != 1) { FAIL("fec flag not set in second packet"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
-    int raw_fec_len = fec_encoded_len(28);
-    if (pkt2_len == 0 || pkt2_len >= raw_fec_len) { FAIL("ROHC+FEC length out of expected range"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    if (fec_flag != 0) { FAIL("fec flag should never be set"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
+    if (pkt2_len == 0 || pkt2_len >= 28) { FAIL("ROHC length out of expected range (< 28 raw)"); close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb); return; }
     PASS();
     close(pipefd[0]); close(pipefd[1]); free(echo.tx_rb);
 }
@@ -584,7 +576,6 @@ void test_rx_state_machine_exact_len_delivers_packet() {
     echo.rx.last_rx_time = 0;
     echo.rx.is_compressed = 0;
     echo.rx.is_rohc = 0;
-    echo.rx.is_fec = 0;
     int target = 16 + 3 * 8;
     for (int i = 17; i <= target; i++) {
         echo.rx.bits_received = i;
@@ -608,7 +599,6 @@ void test_rx_state_machine_overshoot_corrupt_len_resets() {
     echo.rx.last_rx_time = 0;
     echo.rx.is_compressed = 0;
     echo.rx.is_rohc = 0;
-    echo.rx.is_fec = 0;
     /* Envia bits além do comprimento declarado (framing perdido / len corrompido). */
     int target = 16 + 1 * 8;
     echo.rx.bits_received = target + 1;  /* overshoot */
