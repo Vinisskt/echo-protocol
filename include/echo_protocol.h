@@ -5,6 +5,7 @@
 #include "rb_bits.h"
 #include "mod_fsk.h"
 #include "demod_afsk.h"
+#include "coherent_demod.h"
 #include "rohc.h"
 #include "scrambler.h"
 #include "bpfilter.h"
@@ -82,6 +83,7 @@ typedef struct EchoProtocol_s {
     Scrambler tx_scrambler;
     Scrambler rx_scrambler;
     BandpassBank bp_bank;    /* 4 filtros passa-banda (um por tom FSK) */
+    CoherentDemodulator coh_demod;  /* Demodulador coerente com PLL + timing recovery + matched filter */
     ProtocolStats stats;
     AGCState *agc;
 } EchoProtocol;

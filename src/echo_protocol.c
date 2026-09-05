@@ -72,6 +72,9 @@ int echo_init(EchoProtocol *echo, char *dev_name) {
     /* Banco de 4 filtros passa-banda (um por tom FSK) - largura ~500 Hz */
     bandpass_bank_init(&echo->bp_bank, SAMPLE_RATE, 2000.0f);
 
+    /* Inicializa demodulador coerente: PLL + Timing Recovery + Matched Filter */
+    coherent_demod_init(&echo->coh_demod, SAMPLE_RATE, SYMBOL_RATE, freqs);
+
     echo->agc = calloc(1, sizeof(AGCState));
     if (!echo->agc) return -1;
     agc_init(echo->agc);
@@ -239,78 +242,14 @@ void audio_to_rb(EchoProtocol *echo, float *sample) {
     float filtered[4];
     bandpass_bank_process(&echo->bp_bank, *sample, filtered);
 
-    /* === SET A: filtros principais (32 amostras, curta janela) === */
-    float mag_a[4];
-    for (int i = 0; i < 4; i++) {
-        mag_a[i] = process_goertzel_windowed(&echo->freq_states[i], &filtered[i]);
-    }
-
-    /* === SET B: acumular em buffer de janela longa (64 amostras) === */
-    for (int i = 0; i < 4; i++) {
-        int idx = echo->long_buf_idx[i];
-        echo->long_window_buf[i][idx] = filtered[i];
-        echo->long_buf_idx[i] = idx + 1;
-    }
-
-    /* === DECISÃO: a cada 32 amostras (final de símbolo) === */
-    echo->long_samples_count++;
-    if (++echo->rx.rx_sample_count < SAMPLES_PER_SYMBOL) {
-        return;
-    }
-
-    /* --- Set A: escolher candidato (max magnitude) --- */
-    int max_idx = 0;
-    for (int i = 1; i < 4; i++) {
-        if (mag_a[i] > mag_a[max_idx]) max_idx = i;
-    }
-
+    /* === DEMODULADOR COERENTE: PLL + Timing Recovery + Matched Filter === */
     uint8_t bits[2];
-    bits[0] = (max_idx >> 1) & 1;
-    bits[1] = max_idx & 1;
+    int bits_ready = coherent_demod_process(&echo->coh_demod, *sample, bits);
 
-    /* --- Validar candidato ANTERIOR quando Set B tem 64 amostras --- */
-    if (echo->long_samples_count >= SAMPLES_LONG_WINDOW) {
-        /* Set B: processar buffer de 64 amostras com Goertzel longo (2x resolução) */
-        float mag_b[4];
-        for (int i = 0; i < 4; i++) {
-            mag_b[i] = process_goertzel_buffer_long(&echo->freq_valid[i],
-                       echo->long_window_buf[i], SAMPLES_LONG_WINDOW);
-        }
-
-        /* Set B decide independentemente (2x resolução de frequência) */
-        int b_idx = 0;
-        for (int i = 1; i < 4; i++) {
-            if (mag_b[i] > mag_b[b_idx]) b_idx = i;
-        }
-
-        /* Comparar decisão do Set B com candidato pendente do Set A (símbolo anterior) */
-        if (echo->pending_candidate >= 0 && b_idx != echo->pending_candidate) {
-            /* Set B discorda: registrar falha de validação */
-            echo->stats.val_failures++;
-        }
-
-        /* Limpar buffers de Set B e contador */
-        for (int i = 0; i < 4; i++) {
-            echo->long_buf_idx[i] = 0;
-        }
-        echo->long_samples_count = 0;
+    if (bits_ready >= 2) {
+        process_rx_bit(echo, bits[0]);
+        process_rx_bit(echo, bits[1]);
     }
-
-    /* --- Guardar candidato para validação futura (depois da validação) --- */
-    echo->pending_candidate = max_idx;
-    echo->pending_bits[0] = bits[0];
-    echo->pending_bits[1] = bits[1];
-
-    /* --- Reset Set A para próximo símbolo --- */
-    for (int i = 0; i < 4; i++) {
-        reset_state(&echo->freq_states[i]);
-    }
-    echo->rx.rx_sample_count = 0;
-    echo->block_counter++;
-
-    /* --- Output: bits do Set A --- */
-    process_rx_bit(echo, bits[0]);
-    process_rx_bit(echo, bits[1]);
 }
 
 static void rx_reset(EchoProtocol *echo) {
@@ -326,6 +265,7 @@ static void rx_reset(EchoProtocol *echo) {
     scrambler_reset(&echo->rx_scrambler);
     sync_correlator_reset();
     bandpass_bank_reset(&echo->bp_bank);
+    coherent_demod_reset(&echo->coh_demod);
 }
 
 /* Check if a length is a valid FEC-encoded length */
