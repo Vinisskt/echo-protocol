@@ -138,6 +138,13 @@ int main(int argc, char *argv[]) {
             bit = scrambler_process(&echo.tx_scrambler, bit);
             put_bits(echo.tx_rb, &bit);
         }
+        // CRC16 end-to-end anexado (mesmo formato do tun_to_rb)
+        uint16_t crc = frame_crc(header, dummy_ip, 28);
+        for (int b = 15; b >= 0; b--) {
+            uint8_t bit = (crc >> b) & 1;
+            bit = scrambler_process(&echo.tx_scrambler, bit);
+            put_bits(echo.tx_rb, &bit);
+        }
         usleep(50000);  // 50ms entre pacotes IR
     }
 

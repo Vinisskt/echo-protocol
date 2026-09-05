@@ -12,6 +12,14 @@
 static void rx_reset(EchoProtocol *echo);
 static uint8_t is_valid_header(uint16_t header);
 
+/* CRC do frame: header (2B, MSB primeiro) + payload. Mesma função no TX e RX
+ * garante que qualquer flip em header/payload/crc seja detectado (crc_fail). */
+uint16_t frame_crc(uint16_t header, const uint8_t *payload, int payload_len) {
+    uint8_t hdr[2] = { (uint8_t)(header >> 8), (uint8_t)(header & 0xFF) };
+    uint16_t crc = crc16_ccitt(hdr, 2);
+    return crc16_ccitt_carry(crc, payload, payload_len);
+}
+
 int echo_init(EchoProtocol *echo, char *dev_name) {
     
     echo->tun_fd = tun_alloc(dev_name, IFF_TUN | IFF_NO_PI);
@@ -148,6 +156,17 @@ void tun_to_rb(EchoProtocol *echo) {
             return;
         }
     }
+
+    /* CRC16 end-to-end (header + payload) anexado ao frame */
+    uint16_t crc = frame_crc(header, final_ptr, final_len);
+    for (int i = 15; i >= 0; i--) {
+        uint8_t bit = (crc >> i) & 1;
+        bit = scrambler_process(&echo->tx_scrambler, bit);
+        if (!put_bits(echo->tx_rb, &bit)) {
+            log_warn("TX buffer full during crc, dropping packet");
+            return;
+        }
+    }
 }
 
 static void handle_data_state(EchoProtocol *echo, uint8_t bit) {
@@ -158,11 +177,13 @@ static void handle_data_state(EchoProtocol *echo, uint8_t bit) {
     echo->rx.bits_received++;
 
     if (echo->rx.bits_received > 16) {
+        /* frame = 16 (header) + payload*8 + 16 (crc16 end-to-end) bits */
         uint32_t payload_bits = (uint32_t)echo->rx.packet_len * 8;
-        if (echo->rx.bits_received == (payload_bits + 16)) {
+        uint32_t frame_bits = payload_bits + 16 + 16;
+        if (echo->rx.bits_received == frame_bits) {
             echo->rx.state = SEARCHING;
             atomic_store(&echo->rx.packet_ready, 1);
-        } else if (echo->rx.bits_received > (payload_bits + 16)) {
+        } else if (echo->rx.bits_received > frame_bits) {
             /* Comprimento declarado no header não bateu com o recebido
                (ex.: packet_len corrompido) -> descarta já, em vez de travar
                em DATA até o timeout de 6 s de process_rx_bit. */
@@ -328,11 +349,13 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
     memset(audio_payload, 0, sizeof(audio_payload));
 
     uint8_t bit;
-    for(int i=0; i<16; i++) {
+    uint16_t header = 0;
+    for (int i = 0; i < 16; i++) {
         if (get_bits(echo->rx_rb, &bit) == 0) {
             rx_reset(echo);
             return;
         }
+        header = (uint16_t)((header << 1) | bit);
     }
 
     if (*packet_len <= 0 || *packet_len > (int)sizeof(audio_payload)) {
@@ -350,6 +373,27 @@ void rb_to_tun(EchoProtocol *echo, int *packet_len) {
             return;
         }
         audio_payload[i >> 3] = (audio_payload[i >> 3] << 1) | bit;
+    }
+
+    /* CRC16 end-to-end: valida header+payload antes de decodificar. Deteta
+     * corrupcao no payload que nem ROHC/LZ4 nem o ip_cksum veriam (o bug
+     * silencioso: payload corrompido entregue como RX OK). */
+    uint16_t rx_crc = 0;
+    for (int i = 0; i < 16; i++) {
+        if (get_bits(echo->rx_rb, &bit) == 0) {
+            rx_reset(echo);
+            return;
+        }
+        rx_crc = (uint16_t)((rx_crc << 1) | bit);
+    }
+
+    uint16_t expected = frame_crc(header, audio_payload, *packet_len);
+    if (rx_crc != expected) {
+        echo->stats.rx_corrupted++;
+        log_warn("RX corrupt | reason=crc_fail | air=%d | total=%llu", *packet_len,
+                 (unsigned long long)echo->stats.rx_corrupted);
+        rx_reset(echo);
+        return;
     }
 
     int out_size = 0;

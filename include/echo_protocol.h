@@ -8,6 +8,7 @@
 #include "rohc.h"
 #include "scrambler.h"
 #include "bpfilter.h"
+#include "crc16.h"
 #include <stdatomic.h>
 
 /* Forward declare para evitar include circular com agc.h */
@@ -90,6 +91,9 @@ void echo_close(EchoProtocol *echo);
 void tun_to_rb(EchoProtocol *echo);
 void rb_to_tun(EchoProtocol *echo, int *packet_len);
 void audio_to_rb(EchoProtocol *echo, float *sample);
+
+/* CRC do frame: header (2B, MSB primeiro) + payload. TX anexa e RX valida. */
+uint16_t frame_crc(uint16_t header, const uint8_t *payload, int payload_len);
 
 #ifdef ECHO_PROTOCOL_TEST
 /* Acesso a funções static para testes unitários (compilado só com -DECHO_PROTOCOL_TEST). */

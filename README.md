@@ -1,6 +1,6 @@
 # Echo Protocol 🔊
 
-Protocolo de rede acústico para Linux que tunela tráfego IP através de frequências de áudio usando modulação **4-FSK** com compressão **ROHC** (IPv4 e IPv6) e **LZ4**.
+Protocolo de rede acústico para Linux que tunela tráfego IP através de frequências de áudio usando modulação **4-FSK** com compressão **ROHC** (IPv4 e IPv6), **LZ4** e checksum **CRC16** end-to-end por frame.
 
 ## Arquitetura
 
@@ -9,6 +9,7 @@ Protocolo de rede acústico para Linux que tunela tráfego IP através de frequ�
 - **Buffer circular lock-free SPSC:** 8KB com operações atômicas, thread-safe sem mutex.
 - **Interface TUN:** Integração direta com o kernel Linux via ioctl.
 - **Compressão ROHC:** Compressão de header IPv4 e IPv6 com contextos TX/RX separados.
+- **CRC16 end-to-end:** Todo frame carrega checksum CCITT-FALSE (header + payload) validado no RX antes da decompressão (categoria de corrupção `crc_fail`).
 - **Compressão LZ4:** Fallback para payloads não comprimíveis por ROHC.
 
 ## Status Técnico
