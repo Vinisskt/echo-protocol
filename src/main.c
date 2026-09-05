@@ -102,7 +102,6 @@ int main(int argc, char *argv[]) {
 
     /* Ganho TX ALTO para IR packets (warm-up) — garante que cheguem no peer.
      * Depois o AGC assume com ganho BAIXO (conservador) e sobe por medição. */
-    extern void agc_set_initial_gains(AudioState *audio, float tx_gain, float rx_gain);
     agc_set_initial_gains(&audio, 2.5f, 1.0f);
 
     log_info("warm-up de audio (5s) + estabelecendo contexto ROHC...");

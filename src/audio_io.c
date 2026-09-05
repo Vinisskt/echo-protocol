@@ -1,5 +1,6 @@
 #include "../include/audio_io.h"
 #include "../include/echo_protocol.h"
+#include "../include/level_control.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -54,7 +55,10 @@ static int paCallback(const void *inputBuffer, void *outputBuffer,
                         ? sqrtf(audio->in_rms_sum / AUDIO_RMS_WIN)
                         : 0.0f;
             atomic_store(&audio->in_rms, rms);
-            audio_to_rb(echo, &in[i]);
+            /* Ganho RX do AGC aplicado no sinal DC-removido, antes da demodulação.
+               O RMS medido acima fica pré-AGC (nível real de entrada). */
+            float scaled = level_scale_rx(xac, atomic_load(&audio->rx_gain));
+            audio_to_rb(echo, &scaled);
         }
 
         if (echo->tx.tx_sample_count >= SAMPLES_PER_SYMBOL) {
@@ -67,7 +71,10 @@ static int paCallback(const void *inputBuffer, void *outputBuffer,
             echo->tx.tx_sample_count = 0;
         }
 
-        out[i] = generate_fsk(&echo->mod_state, &current_tx_symbol);
+        /* Ganho TX do AGC escalando a forma de onda FSK (SPL no alto-falante);
+           clamp em 0.99 evita clipping duro no DAC. */
+        out[i] = level_scale_tx(generate_fsk(&echo->mod_state, &current_tx_symbol),
+                                atomic_load(&audio->tx_gain));
         echo->tx.tx_sample_count++;
     }
 

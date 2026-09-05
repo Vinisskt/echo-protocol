@@ -31,7 +31,7 @@ FEC (Reed-Solomon) está desativado; sem paridade no ar.
 Header de 16 bits: bit 15 = LZ4, bit 14 = ROHC, bit 13 = reservado, bits 12-0 = tamanho (max 8191 bytes).
 
 ### 2. `rb_to_audio` (Callback de Áudio — thread separada)
-Consome símbolos (2 bits) do `tx_rb` a 1500 baud (3000 bps). Se vazio, envia tom idle (símbolo 3 = 5000 Hz). O callback roda em tempo real pelo PortAudio.
+Consome símbolos (2 bits) do `tx_rb` a 1500 baud (3000 bps). Se vazio, envia tom idle (símbolo 3 = 5000 Hz). O callback roda em tempo real pelo PortAudio. Nele os **ganhos do AGC são consumidos**: a amostra 4-FSK é escalada por `tx_gain` (com clamp em ±0.99 p/ não clipar o DAC) e a amostra de mic é escalada por `rx_gain` (clamp ±8.0) antes da demodulação. `tx_gain`/`rx_gain`/`agc_freeze` são `_Atomic` (escritos na main loop / AGC, lidos na thread realtime).
 
 ### 3. `audio_to_rb` (Callback → Demodulação → Buffer)
 Processa amostras do microfone via 4 filtros Goertzel. A cada `SAMPLES_PER_SYMBOL` amostras (32 em 48kHz), decide o símbolo de maior energia e extrai 2 bits. Detecta sync word (`0x930B51DE`) para inicio de frame.

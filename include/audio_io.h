@@ -16,10 +16,10 @@ typedef struct EchoProtocol_s EchoProtocol;
 typedef struct {
     PaStream *stream;
     EchoProtocol *echo;
-    float tx_gain;
-    float rx_gain;
+    _Atomic float tx_gain;      /* ganho TX (escrito na main/AGC, lido no callback) */
+    _Atomic float rx_gain;      /* ganho RX (escrito na main/AGC, lido no callback) */
     _Atomic float in_rms;       /* nível RMS real de entrada (escrito no callback) */
-    int agc_freeze;
+    _Atomic int agc_freeze;     /* congela AGC durante TX (escrito no callback) */
     /* estado de medição de RMS (pré-AGC) */
     float in_rms_win[AUDIO_RMS_WIN];
     int   in_rms_idx;

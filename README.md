@@ -10,6 +10,7 @@ Protocolo de rede acústico para Linux que tunela tráfego IP através de frequ�
 - **Interface TUN:** Integração direta com o kernel Linux via ioctl.
 - **Compressão ROHC:** Compressão de header IPv4 e IPv6 com contextos TX/RX separados.
 - **CRC16 end-to-end:** Todo frame carrega checksum CCITT-FALSE (header + payload) validado no RX antes da decompressão (categoria de corrupção `crc_fail`).
+- **AGC integrado no caminho de áudio:** ganhos TX/RX aplicados em tempo real no callback — TX escala a forma de onda FSK (SPL no alto-falante, com clamp anti-clipping no DAC) e RX scala a amostra antes da demodulação. Atomicidade (`_Atomic float`) entre a thread de áudio e a main loop.
 - **Compressão LZ4:** Fallback para payloads não comprimíveis por ROHC.
 
 ## Status Técnico
